@@ -1,0 +1,12 @@
+# Strategic-merge patch for the Deployment: tell the kubelet which resources
+# can change without a container restart.
+spec:
+  template:
+    spec:
+      containers:
+        - name: load
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired

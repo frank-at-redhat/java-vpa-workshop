@@ -1,0 +1,13 @@
+// This workshop's pages. Its nav.adoc includes this list when the workshop is built
+// alone, and the site's navigation includes it under Workshop Content, so the list
+// starts at the third level and every xref names this module.
+*** Module 1: The JVM in a Container
+**** xref:java-vpa:module-01-jvm-in-containers.adoc[The JVM in a Container]
+*** Module 2: Observability with OpenTelemetry
+**** xref:java-vpa:module-02-opentelemetry.adoc[Observability with OpenTelemetry]
+*** Module 3: VPA Recommendations
+**** xref:java-vpa:module-03-vpa-recommendations.adoc[VPA Recommendations]
+*** Module 4: In-Place Resize
+**** xref:java-vpa:module-04-in-place-resize.adoc[In-Place Resize]
+*** Module 5: Wrap-Up
+**** xref:java-vpa:module-05-wrap-up.adoc[Wrap-Up and Platform Defaults]

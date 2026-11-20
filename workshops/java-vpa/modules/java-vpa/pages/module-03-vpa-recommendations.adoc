@@ -1,0 +1,207 @@
+= VPA Recommendations
+
+This module covers how the Vertical Pod Autoscaler produces a recommendation,
+what each update mode does, and why every Java workload should start in `Off`
+mode with the JVM metrics from Module 2 open next to it.
+
+.Exercises on this page
+* <<exercise-1>>
+* <<exercise-2>>
+
+== Components
+
+The VPA Operator on OpenShift runs three controllers in
+`openshift-vertical-pod-autoscaler`:
+
+[cols="1,3",options="header"]
+|===
+|Controller |What it does
+
+|Recommender
+|Reads usage history from the metrics server, keeps a decaying histogram per
+container, and writes a target, lower bound, upper bound and uncapped target
+into the VPA's `status`.
+
+|Updater
+|In any mode but `Off` and `Initial`, finds pods whose requests are outside
+the recommendation and either resizes them in place or evicts them.
+
+|Admission controller
+|A mutating webhook. When a pod is created (or recreated after eviction), it
+rewrites `resources` to the recommendation before the pod is scheduled.
+|===
+
+The recommender needs history before its numbers mean anything.
+It weights recent samples more heavily, but a brand-new VPA on a brand-new pod
+gives you the controller's minimums, not a recommendation.
+Plan on 8 to 24 hours of representative traffic before trusting it on a real
+workload.
+For the workshop, the facilitator lowered the safety margin and we'll wait a
+few minutes.
+
+[NOTE]
+====
+*Instructor:* two Operator-level defaults catch everyone.
+`minReplicas` defaults to 2, so a one-replica Deployment is never updated in
+`Recreate` or `InPlaceOrRecreate` mode.
+`podMinMemoryMb` defaults to 250, so recommendations never go below 250 Mi
+regardless of usage.
+Both live on the `VerticalPodAutoscalerController` named `default`.
+====
+
+== Update modes
+
+[cols="1,2,2",options="header"]
+|===
+|`updateMode` |Behavior |Use it for
+
+|`Off`
+|Recommend only. Nothing changes.
+|Every Java workload, first. Read the recommendation against JVM metrics for
+a day before going further.
+
+|`Initial`
+|Apply the recommendation only when a pod is created. Never touches a
+running pod.
+|Workloads that restart often anyway (CI runners, batch), or as a safe step
+up from `Off`.
+
+|`Recreate`
+|Evict pods whose requests drift from the recommendation; the admission
+controller sizes the replacement.
+|Stateless services with enough replicas and a `PodDisruptionBudget`.
+Historically the only "auto" mode.
+
+|`InPlaceOrRecreate`
+|Try to resize the running pod via the `resize` subresource; fall back to
+eviction if the kubelet can't do it.
+|The mode this workshop is about. Module 4.
+|===
+
+Memory recommendations and the heap pull against each other unless
+`MaxRAMPercentage` is set: VPA sizes the container, the JVM sizes the heap
+from the container, and `-Xmx` breaks the chain.
+Module 1 already fixed that for the sample app.
+
+[#exercise-1]
+== Exercise 1: Create a VPA in `Off` mode
+
+. Create it. Note the `resourcePolicy`: `minAllowed` and `maxAllowed` are
+your guardrails, and `controlledValues: RequestsAndLimits` keeps the
+request-to-limit ratio you set on the Deployment:
++
+[source,yaml]
+----
+include::example$vpa-off.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc apply -f vpa-off.yaml
+----
+
+. Give the recommender a minute, then read the status:
++
+[source,bash,role=execute]
+----
+oc get vpa load -o jsonpath='{.status.recommendation}' | jq
+----
++
+You get four numbers per resource:
++
+[cols="1,3",options="header"]
+|===
+|Field |Meaning
+
+|`target`
+|What the updater would apply.
+
+|`lowerBound`
+|Below this, the updater will act (in modes that act).
+
+|`upperBound`
+|Above this, the updater will act to shrink.
+
+|`uncappedTarget`
+|The target before `minAllowed`, `maxAllowed` and the Operator minimums
+were applied. If `target` equals `minAllowed` and `uncappedTarget` is
+lower, the VPA wanted less and your guardrail stopped it.
+|===
+
+. Check the conditions too. `RecommendationProvided` tells you whether the
+numbers are real yet:
++
+[source,bash,role=execute]
+----
+oc get vpa load -o jsonpath='{.status.conditions}' | jq
+----
+
+[#exercise-2]
+== Exercise 2: Drive load and watch the recommendation move
+
+. Add retained heap, then CPU, and keep the recommendation and the JVM
+metrics from Module 2 side by side:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=250'
+----
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/cpu?t=4&s=300'
+----
+
+. Poll the recommendation every 30 seconds for a few minutes:
++
+[source,bash,role=execute]
+----
+watch -n 30 "oc get vpa load \
+  -o jsonpath='{.status.recommendation.containerRecommendations[0]}' \
+  | jq '{target, upperBound}'"
+----
++
+The memory target climbs toward the working set.
+The CPU target climbs past the `500m` limit because the four spinning
+threads want four cores and are being throttled to one.
+It will likely hit `maxAllowed` (2 cores) within a few minutes; the
+`uncappedTarget` shows what it wanted.
+
+. Now the question that justifies Module 2. The memory target is larger than
+the heap in use. Is the extra:
++
+* non-heap the JVM genuinely needs (metaspace, threads, agent)?
+* heap that the JVM grew into because `MaxRAMPercentage` let it, even though
+live data is smaller?
++
+Run both and compare:
++
+[source,promql]
+----
+sum(jvm_memory_used_bytes{jvm_memory_type="heap"})
+----
++
+[source,promql]
+----
+sum(jvm_memory_used_bytes{jvm_memory_type="non_heap"})
+----
++
+On the sample app the heap number matches what we retained, so the
+recommendation is honest.
+On a real service, if `jvm_gc_duration` is near zero and the heap is sitting
+far above live data, the container is over-provisioned and VPA is faithfully
+recommending the over-provisioning.
+Lower `MaxRAMPercentage` first, then let VPA re-learn.
+
+[TIP]
+====
+The VPA sizes what it observes.
+If the JVM's configuration makes it *use* more than it *needs*, VPA
+recommends the waste.
+Fix the JVM flags, then trust the recommender.
+====
+
+== Clean Up
+
+Leave everything running.
+Module 4 switches the same VPA to `InPlaceOrRecreate`.

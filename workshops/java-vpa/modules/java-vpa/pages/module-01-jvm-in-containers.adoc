@@ -1,0 +1,225 @@
+= The JVM in a Container
+
+This module is mostly discussion with one short exercise.
+It covers how the JVM reads the limits the kubelet gives it, what "memory"
+means to each side, and the three patterns that cause most OOMKills and
+throttling on Java workloads.
+
+.Exercises on this page
+* <<exercise-1>>
+* <<exercise-2>>
+
+== Memory: what the kubelet counts versus what the heap is
+
+The container's memory limit is a cgroup limit on *everything* in the process:
+
+* Heap (`-Xmx`, or the share set by `-XX:MaxRAMPercentage`)
+* Metaspace (class metadata; grows with the number of loaded classes)
+* Thread stacks (default 1 MiB each on 64-bit Linux; 200 threads is 200 MiB
+of reserved address space)
+* Code cache (JIT-compiled code)
+* Direct and native buffers (NIO, Netty, compression, TLS)
+* GC bookkeeping, symbol tables, and the JVM's own working set
+
+The JVM only sizes the heap from the limit.
+Everything else is "non-heap" and is not bounded by `MaxRAMPercentage`.
+That's why a container with `-XX:MaxRAMPercentage=90` gets OOMKilled: the heap
+alone fills 90% of the limit, and there's no room for the rest.
+
+[IMPORTANT]
+====
+*The JVM reads the cgroup limit once, at startup.*
+This is the fact the rest of the workshop turns on.
+If the limit changes while the JVM is running, the heap does not grow or
+shrink to match.
+====
+
+=== `-Xmx` versus `-XX:MaxRAMPercentage`
+
+[cols="1,2,2",options="header"]
+|===
+|Flag |Behavior |When to use
+
+|`-Xmx2g`
+|Fixed heap, regardless of the container limit. Overrides `MaxRAMPercentage`
+if both are set.
+|Almost never on Kubernetes. It makes the limit and the heap drift apart as
+soon as anyone changes one of them.
+
+|`-XX:MaxRAMPercentage=75.0`
+|Heap is 75% of the cgroup limit, read at startup.
+|The default to standardize on. 75% leaves room for non-heap; drop it for
+apps with many threads or large direct buffers.
+
+|`-XX:InitialRAMPercentage`
+|Starting heap as a percentage of the limit.
+|Set it equal to `MaxRAMPercentage` for latency-sensitive services, so the
+heap doesn't grow in steps under load.
+|===
+
+The container-awareness flag (`-XX:+UseContainerSupport`) has been on by
+default since JDK 10 and reads cgroup v2 correctly from JDK 15.
+On a JDK 21 or 25 image you don't need to think about it.
+
+== CPU: limits become `availableProcessors()`
+
+The JVM rounds the CPU limit up to an integer and reports that as the number of
+available processors.
+A `500m` limit is 1 processor.
+That number feeds:
+
+* The number of GC worker threads (G1 sizes parallel and concurrent workers
+from it)
+* The number of JIT compiler threads
+* `ForkJoinPool.commonPool()` parallelism, which backs parallel streams and
+`CompletableFuture`
+* Framework thread pools that default to "number of cores"
+
+Two consequences:
+
+. A small CPU limit makes GC and JIT single-threaded, so startup is slow and
+GC pauses are long. This looks like a memory problem on a dashboard.
+. CPU *throttling* (CFS quota exhaustion) doesn't crash anything. It shows up
+as latency and GC pause time, which is why "we have plenty of memory, why is
+it slow" usually ends at the CPU limit.
+
+[TIP]
+====
+Setting a CPU *request* without a CPU *limit* is a legitimate choice for Java
+on OpenShift, and the one the VPA recommender is happiest with.
+The pod still gets its request guaranteed and can burst into idle capacity.
+The trade is that `availableProcessors()` reports the node's cores, so pin
+`-XX:ActiveProcessorCount` if a framework over-provisions threads from it.
+====
+
+== The three anti-patterns
+
+[cols="1,2,2",options="header"]
+|===
+|Pattern |What happens |What to do instead
+
+|Big heap, small limit
+|`-Xmx` set by someone who knew the app, limit set by someone who knew the
+quota. The heap alone exceeds the limit. OOMKilled under load, never in dev.
+|Remove `-Xmx`; use `MaxRAMPercentage`.
+
+|Requests equal limits everywhere
+|`Guaranteed` QoS feels safe, but it means every pod reserves its peak, nodes
+look full at 30% utilization, and VPA has nothing to recommend because it's
+been told the ceiling is the floor.
+|Requests at typical, limits at peak (or no CPU limit). Let VPA find
+"typical".
+
+|No limits at all
+|One leaky JVM takes the node down with it, and the OOM killer picks a victim
+that isn't the leaky one.
+|Always set a memory limit. CPU limit is optional (see the tip above).
+|===
+
+[#exercise-1]
+== Exercise 1: What the JVM thinks it has
+
+. Create a project for the workshop:
++
+[source,bash,role=execute]
+----
+oc new-project java-vpa
+----
+
+. Load the sample app's source into a ConfigMap. It's a single file; the
+container runs it directly, so there's no image to build:
++
+[source,bash,role=execute]
+----
+oc create configmap load-src \
+  --from-file=Load.java
+----
++
+The file is in this workshop's `downloads/` folder and shown below.
++
+.Load.java
+[%collapsible]
+====
+[source,java]
+----
+include::example$Load.java[]
+----
+====
+
+. Deploy it. Read the `resources` and `JAVA_TOOL_OPTIONS` before you apply:
++
+[source,yaml]
+----
+include::example$deployment.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc apply -f deployment.yaml
+----
+
+. Ask the JVM what it sees:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s localhost:8080/
+----
++
+With a `500m` CPU limit and `512Mi` memory limit it prints
+`availableProcessors=1` and a max heap of about `371MiB`: 75% of 512 is 384,
+less a survivor-space reservation the JVM holds back.
+
+[#exercise-2]
+== Exercise 2: Break it the usual way
+
+. Override the heap the way a developer who knew the app in 2019 would:
++
+[source,bash,role=execute]
+----
+oc set env deploy/load \
+  JAVA_TOOL_OPTIONS="-Xmx1g -XX:+ExitOnOutOfMemoryError"
+----
+
+. Wait for the rollout, then push it past the container limit:
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/load
+----
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=600'
+----
+
+. Watch what happens:
++
+[source,bash,role=execute]
+----
+oc get pods -l app=load -w
+----
++
+The JVM happily allocates past 512 MiB because `-Xmx1g` told it to.
+The kernel kills it; the pod shows `OOMKilled` and restarts.
+Nothing in the JVM's own logs says why.
+
+. Put it back:
++
+[source,bash,role=execute]
+----
+oc set env deploy/load \
+  JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+----
++
+Now the same `/alloc` call ends in a Java `OutOfMemoryError` with a stack
+trace, and the JVM exits on its own terms.
+Same crash, but a diagnosable one.
+
+[NOTE]
+====
+*Instructor:* this is the moment to ask whether anyone's apps set `-Xmx`
+explicitly, in `JAVA_OPTS`, in a Dockerfile `ENTRYPOINT`, or in a framework
+config.
+It overrides `MaxRAMPercentage` silently, and it's the first thing to go hunt
+for.
+====

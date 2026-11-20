@@ -1,0 +1,157 @@
+= Wrap-Up and Platform Defaults
+
+No exercises on this page.
+It's the decision tree and the defaults to leave the platform team with, plus
+the action items to capture before the session ends.
+
+== Which mode for which workload
+
+None of these apps use HPA, so the decision is only about VPA mode and resize
+policy.
+
+[cols="2,1,1,3",options="header"]
+|===
+|Workload |`updateMode` |Memory `resizePolicy` |Why
+
+|Anything new to VPA
+|`Off`
+|n/a
+|Read the recommendation against JVM metrics for at least a day. Fix
+`-Xmx` and `MaxRAMPercentage` first; VPA recommends whatever the JVM
+actually uses, including waste.
+
+|Stateless service, 2+ replicas, has a PDB
+|`InPlaceOrRecreate`
+|`RestartContainer`
+|CPU resizes in place. A memory change restarts one container at a time, and
+the PDB keeps the service up. The heap is always right.
+
+|Stateless service, 1 replica
+|`InPlaceOrRecreate`
+|`NotRequired`
+|Accept that memory resizes only help non-heap. Pair it with
+`InitialRAMPercentage` equal to `MaxRAMPercentage` so the heap is fully
+committed at start, and let the next deploy pick up a new heap.
+
+|Stateful, or long-lived connections (MQ consumers, Kafka clients)
+|`Initial`
+|n/a
+|Right-size on each restart you were going to do anyway. Never let VPA
+decide when a stateful pod goes down.
+
+|Batch, CronJob, CI runners
+|`Initial`
+|n/a
+|Every run is a fresh pod. `Initial` is effectively "auto" with no eviction.
+
+|Latency-critical, already hand-tuned
+|`Off`
+|n/a
+|Use VPA as a second opinion. Alert when the recommendation drifts from the
+configured request by more than, say, 30%.
+|===
+
+== Defaults to standardize on
+
+Put these in the base image, a `LimitRange`, or a deployment template, in
+that order of preference, so they can't be forgotten:
+
+[cols="1,1,2",options="header"]
+|===
+|Setting |Value |Note
+
+|`JAVA_TOOL_OPTIONS`
+|`-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError`
+|75% leaves room for non-heap and the agent. Go to 60% for apps with many
+threads or large direct buffers. `ExitOnOutOfMemoryError` turns a hung JVM
+into a restart.
+
+|`-Xmx`
+|Never
+|Grep for it in `JAVA_OPTS`, Dockerfiles, and framework configs.
+
+|JVM flags location
+|Pod spec, not image
+|So the Operator can append `-javaagent` and operators can see what's set.
+
+|Memory request-to-limit ratio
+|1:1 or close
+|Memory isn't compressible. A pod that bursts into memory it didn't request
+gets OOMKilled when the node fills.
+
+|CPU limit
+|Optional
+|Request only is fine for most Java services. If you set a limit, set
+`-XX:ActiveProcessorCount` to match what thread pools should size from.
+
+|`resizePolicy`
+|Explicit, per the table above
+|Don't rely on the `NotRequired` default; it's the wrong answer for
+heap-bound services.
+
+|VPA `resourcePolicy`
+|Always set `minAllowed` and `maxAllowed`
+|`maxAllowed` is what stops a leak from being "recommended" up to node size.
+
+|VPA Operator `minReplicas`
+|Match your real minimum, or set `minReplicas` per VPA
+|The default of 2 silently disables VPA on single-replica Deployments.
+
+|OTel Java agent
+|On, with runtime telemetry; per-library instrumentation enabled
+deliberately
+|Measure its overhead on each service class once, then forget about it.
+
+|Namespace `ResourceQuota`
+|Headroom above the sum of VPA `maxAllowed`, not above today's requests
+|VPA changes are ordinary admission requests. An in-place resize that
+would exceed the quota is rejected and the pod keeps its old size; a
+recreated pod that would exceed it stays `Pending`, which is worse. Size
+quota to what you'd let VPA grow to, and alert on quota usage above ~80%.
+|===
+
+== What to watch in production
+
+Four alerts cover most of what this workshop was about:
+
+. Recommendation drift: `vpa` target versus configured request, for VPAs
+in `Off` mode.
+. GC pressure: `sum(rate(jvm_gc_duration_seconds_sum[5m]))` above a few
+percent means the heap or the CPU limit is wrong.
+. Non-heap growth: `jvm_memory_used_bytes{jvm_memory_type="non_heap"}`
+trending up over days is a classloader or native leak, and no amount of VPA
+fixes it.
+. Quota headroom: `kube_resourcequota{type="used"}` against
+`kube_resourcequota{type="hard"}` above 80% for `requests.memory` or
+`limits.memory`. A VPA that can't grow a pod because of quota fails
+quietly; the only trace is a `VerticalPodAutoscaler` event on the pod and a
+`FailedCreate` or resize rejection, so alert on the headroom instead.
+
+== Action Items
+
+Capture these before the session ends.
+Suggested owners are in brackets.
+
+* [App teams] Inventory `-Xmx` usage across the Java estate and remove it.
+* [Platform] Decide where `JAVA_TOOL_OPTIONS` defaults live (base image or
+template) and ship it.
+* [Platform] Install the OTel Operator and Collector pattern from Module 2 in
+the first target namespace; agree on which instrumentations are on by
+default.
+* [Both] Pick two or three services, put VPAs on them in `Off` mode, and
+review the recommendations in a week.
+* [Platform] Set `VerticalPodAutoscalerController` `minReplicas` and decide
+on a default `resizePolicy` for the deployment template.
+* [Platform] Review `ResourceQuota` in each Java namespace against the VPA
+`maxAllowed` values you'd set there; raise quota or lower `maxAllowed` so
+they agree.
+* [Both] Agree on the alerts above and who gets paged.
+
+== Clean Up
+
+Delete the workshop project:
+
+[source,bash,role=execute]
+----
+oc delete project java-vpa
+----

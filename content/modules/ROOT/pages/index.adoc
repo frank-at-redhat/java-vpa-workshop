@@ -1,0 +1,31 @@
+= Java Right-Sizing Workshop
+
+This workshop is for platform engineers and Java application teams running
+services on OpenShift who are fighting resource problems: OOMKills, CPU
+throttling that looks like slowness, or nodes that are "full" at 30% use.
+By the end, you can explain how the JVM reads container limits, stand up the
+OpenTelemetry Java agent so JVM behavior is visible, and use the Vertical Pod
+Autoscaler with in-place resize to right-size workloads without guessing.
+
+== Where to Start
+
+[cols="1,2",options="header"]
+|===
+|You are |Start here
+
+|Running a delivery of the workshop
+|xref:instructor.adoc[Workshop Instructor Guide]: what the workshop covers, the environment it needs, and how to run it; xref:downloads.adoc[Downloads] has the release's PDF, Helm chart and disconnected guide.
+
+|Taking the workshop
+|xref:attendee.adoc[Workshop Attendee Guide]: how the workshop works and where to begin.
+
+|Looking for the command-line tools
+|xref:cli-tools.adoc[Shared CLI tools]: run `oc`, `helm` and the other tools in a pod on the cluster instead of installing them.
+|===
+
+== Included Workshops
+
+Each one stands on its own; run them in the order listed or pick the ones your group needs.
+
+* xref:java-vpa:index.adoc[Right-Sizing Java on OpenShift]
+// add-workshop.py adds workshops above this line

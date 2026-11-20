@@ -1,0 +1,50 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel
+spec:
+  mode: deployment
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {}
+    exporters:
+      # Exposes everything received as a Prometheus scrape target,
+      # which user workload monitoring then picks up (see ServiceMonitor).
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        resource_to_telemetry_conversion:
+          enabled: true
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector-exported
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+      # The Operator also creates a -headless Service with the same name
+      # label; without this the Collector is scraped twice.
+      operator.opentelemetry.io/collector-service-type: base
+  endpoints:
+    - port: prometheus
+      interval: 15s

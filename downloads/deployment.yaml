@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load
+  labels:
+    app: load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: load
+  template:
+    metadata:
+      labels:
+        app: load
+    spec:
+      # Old pods linger for 30s by default and `oc exec deploy/load` may
+      # pick one. The app has nothing to flush, so let them go quickly.
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: load
+          image: registry.access.redhat.com/ubi9/openjdk-21:latest
+          command: ["java", "/app/Load.java"]
+          env:
+            # Let the JVM size its heap from the cgroup limit.
+            # -XX:+UseContainerSupport has been the default since JDK 10.
+            - name: JAVA_TOOL_OPTIONS
+              value: >-
+                -XX:MaxRAMPercentage=75.0
+                -XX:+ExitOnOutOfMemoryError
+          ports:
+            - containerPort: 8080
+          # The app compiles from source at startup and the OTel agent adds
+          # a few seconds more; without this, rollouts "finish" early.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # Deliberately undersized so VPA has something to recommend.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: src
+              mountPath: /app
+      volumes:
+        - name: src
+          configMap:
+            name: load-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: load
+spec:
+  selector:
+    app: load
+  ports:
+    - port: 8080
+      targetPort: 8080

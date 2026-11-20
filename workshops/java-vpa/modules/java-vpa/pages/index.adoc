@@ -1,0 +1,57 @@
+= Right-Sizing Java on OpenShift: VPA and OpenTelemetry
+
+This workshop shows how to right-size Java workloads on OpenShift 4.22 using the
+Vertical Pod Autoscaler (VPA) with in-place pod resize, and how to use the
+OpenTelemetry Java agent to see what the JVM is actually doing before trusting
+any recommendation.
+After it, attendees can explain why Java needs special handling under VPA, stand
+up the OpenTelemetry pieces that make JVM behavior visible, and choose a VPA
+update mode per workload with confidence.
+
+Before you start, make sure your environment meets the xref:setup-requirements.adoc[Setup Requirements].
+
+== Agenda (2 hours)
+
+[cols="1,3,1",options="header"]
+|===
+|Section |What it covers |Time
+
+|Framing
+|The symptoms on the table, and why the JVM is the hard case for autoscaling.
+|10 min
+
+|xref:module-01-jvm-in-containers.adoc[Module 1]
+|How the JVM sees memory and CPU limits, and the anti-patterns that cause most pain.
+|20 min
+
+|xref:module-02-opentelemetry.adoc[Module 2]
+|Installing the Red Hat build of OpenTelemetry, injecting the Java agent, and
+reading JVM metrics.
+|30 min
+
+|xref:module-03-vpa-recommendations.adoc[Module 3]
+|VPA components and modes, starting in `Off` and comparing recommendations to
+JVM metrics.
+|20 min
+
+|xref:module-04-in-place-resize.adoc[Module 4]
+|`InPlaceOrRecreate`, what resizes cleanly, and the heap catch.
+|25 min
+
+|xref:module-05-wrap-up.adoc[Module 5]
+|A decision tree per workload type and platform defaults to leave with.
+|15 min
+|===
+
+== Modules
+
+. xref:module-01-jvm-in-containers.adoc[The JVM in a Container]: memory, CPU,
+and the three anti-patterns.
+. xref:module-02-opentelemetry.adoc[Observability with OpenTelemetry]: the
+Collector, the `Instrumentation` CR and the JVM metrics that matter for sizing.
+. xref:module-03-vpa-recommendations.adoc[VPA Recommendations]: the VPA Operator,
+update modes, and reading a recommendation in `Off` mode.
+. xref:module-04-in-place-resize.adoc[In-Place Resize]: `InPlaceOrRecreate`,
+resize policies, and why a running JVM doesn't grow its heap.
+. xref:module-05-wrap-up.adoc[Wrap-Up and Platform Defaults]: which mode for
+which workload, and the defaults to standardize on.

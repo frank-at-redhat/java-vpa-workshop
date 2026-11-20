@@ -1,0 +1,356 @@
+# Custom OpenShift console dashboard (Observe -> Dashboards).
+# Needs cluster-admin: it lives in openshift-config-managed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: java-vpa-dashboard
+  namespace: openshift-config-managed
+  labels:
+    console.openshift.io/dashboard: "true"
+data:
+  java-vpa.json: |
+    {
+      "title": "Java Right-Sizing: VPA and JVM",
+      "uid": "java-vpa",
+      "tags": [
+        "java-vpa"
+      ],
+      "timezone": "browser",
+      "refresh": "15s",
+      "time": {
+        "from": "now-30m",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "datasource": "prometheus",
+            "label": "Namespace",
+            "query": "label_values(kube_pod_info{namespace=~\"java-vpa.*\"}, namespace)",
+            "refresh": 2,
+            "sort": 1
+          },
+          {
+            "name": "pod",
+            "type": "query",
+            "datasource": "prometheus",
+            "label": "Pod",
+            "query": "label_values(kube_pod_info{namespace=\"$namespace\", pod=~\"load-.*\"}, pod)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "allValue": ".*"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "graph",
+          "title": "Memory: container limit vs JVM heap",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "yaxes": [
+            {
+              "format": "bytes",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "max(kube_pod_container_resource_limits{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\", resource=\"memory\"})",
+              "legendFormat": "container limit",
+              "refId": "A"
+            },
+            {
+              "expr": "max(container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"})",
+              "legendFormat": "container working set",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(jvm_memory_limit_bytes{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\", jvm_memory_type=\"heap\"})",
+              "legendFormat": "JVM max heap",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(jvm_memory_used_bytes{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\", jvm_memory_type=\"heap\"})",
+              "legendFormat": "JVM heap used",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(jvm_memory_used_bytes{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\", jvm_memory_type=\"non_heap\"})",
+              "legendFormat": "JVM non-heap used",
+              "refId": "E"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "graph",
+          "title": "CPU: container limit vs JVM view",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "max(kube_pod_container_resource_limits{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\", resource=\"cpu\"})",
+              "legendFormat": "container limit (cores)",
+              "refId": "A"
+            },
+            {
+              "expr": "max(jvm_cpu_count{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\"})",
+              "legendFormat": "availableProcessors()",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"}[2m]))",
+              "legendFormat": "usage (cores)",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"}[2m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"}[2m]))",
+              "legendFormat": "throttled ratio",
+              "refId": "D"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "graph",
+          "title": "Container restarts",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 0,
+            "y": 8,
+            "w": 8,
+            "h": 6
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "max(kube_pod_container_status_restarts_total{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"})",
+              "legendFormat": "restarts",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "graph",
+          "title": "GC time (fraction of wall clock)",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 8,
+            "y": 8,
+            "w": 8,
+            "h": 6
+          },
+          "yaxes": [
+            {
+              "format": "percentunit",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(jvm_gc_duration_seconds_sum{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\"}[2m]))",
+              "legendFormat": "gc",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "graph",
+          "title": "JVM threads",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 16,
+            "y": 8,
+            "w": 8,
+            "h": 6
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "sum(jvm_thread_count{k8s_namespace_name=\"$namespace\", k8s_pod_name=~\"$pod\"})",
+              "legendFormat": "threads",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "graph",
+          "title": "VPA request vs usage (memory)",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 0,
+            "y": 14,
+            "w": 12,
+            "h": 6
+          },
+          "yaxes": [
+            {
+              "format": "bytes",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "max(kube_pod_container_resource_requests{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\", resource=\"memory\"})",
+              "legendFormat": "request",
+              "refId": "A"
+            },
+            {
+              "expr": "max(container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"})",
+              "legendFormat": "working set",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "graph",
+          "title": "VPA request vs usage (CPU)",
+          "datasource": "prometheus",
+          "gridPos": {
+            "x": 12,
+            "y": 14,
+            "w": 12,
+            "h": 6
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "min": 0
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 0,
+          "stack": false,
+          "nullPointMode": "connected",
+          "legend": {
+            "show": true,
+            "alignAsTable": false
+          },
+          "targets": [
+            {
+              "expr": "max(kube_pod_container_resource_requests{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\", resource=\"cpu\"})",
+              "legendFormat": "request",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", pod=~\"$pod\", container=\"load\"}[2m]))",
+              "legendFormat": "usage",
+              "refId": "B"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 16,
+      "version": 1
+    }

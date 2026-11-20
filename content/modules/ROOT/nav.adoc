@@ -1,0 +1,11 @@
+* xref:index.adoc[Workshop Home]
+* xref:instructor.adoc[Workshop Instructor Guide]
+** xref:downloads.adoc[Downloads]
+** xref:java-vpa:setup-requirements.adoc[Right-Sizing Java on OpenShift]
+// add-workshop.py adds workshops above this line
+* xref:attendee.adoc[Workshop Attendee Guide]
+** xref:cli-tools.adoc[Shared CLI tools]
+* Workshop Content
+** xref:java-vpa:index.adoc[Right-Sizing Java on OpenShift]
+include::java-vpa:partial$nav-items.adoc[]
+// add-workshop.py adds workshops above this line

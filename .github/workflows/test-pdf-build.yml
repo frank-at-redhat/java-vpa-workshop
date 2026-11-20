@@ -1,0 +1,18 @@
+name: Test PDF Build
+# Builds the PDF on pull requests with the shared workflow in redhat-na-ssa/workshop-common.
+on:
+  pull_request:
+    paths:
+      - 'content/**'
+      - 'workshops/**'
+      - 'default-pdf.yml'
+      - 'antora-assembler.yml'
+      - 'Gemfile'
+  workflow_dispatch:  # Allow manual testing
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    uses: redhat-na-ssa/workshop-common/.github/workflows/pdf-test.yml@main

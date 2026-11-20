@@ -1,0 +1,120 @@
+= Workshop Instructor Guide
+
+This page is for the instructor who runs a delivery of the workshop.
+
+== What the Workshop Covers
+
+The audience is mixed: platform engineers who own the cluster and Java
+developers who own the apps.
+Attendees should be comfortable with `oc`, Deployments and resource requests
+and limits; no prior VPA or OpenTelemetry experience is needed.
+Afterwards they can set JVM flags that cooperate with the kubelet, inject the
+OpenTelemetry Java agent without rebuilding an image, read a VPA
+recommendation against JVM metrics, and pick a VPA update mode and resize
+policy per workload.
+
+[cols="2,3,1",options="header"]
+|===
+|Workshop |Covers |Time
+
+
+|xref:java-vpa:index.adoc[Right-Sizing Java on OpenShift]
+|How the JVM sees memory and CPU limits, installing the Red Hat build of
+OpenTelemetry and injecting the Java agent, VPA update modes starting in `Off`,
+and `InPlaceOrRecreate` with the heap caveat that comes with it.
+|2 hours
+// add-workshop.py adds workshops above this line
+|===
+
+== Environment and Requirements
+
+Each workshop lists the cluster components, Operators, command-line tools, roles and access it needs on its own page.
+Prepare everything for the workshops you deliver:
+
+* xref:java-vpa:setup-requirements.adoc[Right-Sizing Java on OpenShift]
+// add-workshop.py adds workshops above this line
+
+Shared by all the workshops: attendees who don't want to install the command-line tools run the workshop CLI tools image on the cluster, as xref:cli-tools.adoc[Shared CLI tools] describes.
+Make sure attendees can pull that image, or mirror it for a disconnected cluster.
+
+xref:downloads.adoc[Downloads] has every file of the release: the PDF, the Helm chart, the list of images to mirror and the guide for running the workshop in a disconnected cluster.
+<<deploy-the-workshop,Deploy the Workshop>> shows how to deploy them.
+
+[#deploy-the-workshop]
+== Deploy the Workshop
+
+include::partial$deploy-workshop.adoc[]
+
+== Before the Day
+
+. Prepare the environment from the setup requirements above, for every attendee.
+. Deploy the workshop, as <<deploy-the-workshop,Deploy the Workshop>> describes.
+. Run the workshop end to end once on an environment built the same way.
+. Send attendees the xref:attendee.adoc[Workshop Attendee Guide] page so they can check their workstation.
+
+== Delivery Notes
+
+=== Timing
+
+The 2-hour agenda on the xref:java-vpa:index.adoc[workshop page] is tight.
+Spend the first 10 minutes getting the group's actual symptoms on the table;
+the rest of the session refers back to them.
+Module 2 (OpenTelemetry) is the one most likely to run long because the
+Operator and Collector rollouts take real time.
+Deploy the Collector during the Module 1 discussion if you need to buy time.
+
+=== The recommender needs history
+
+The VPA recommender gives you Operator minimums, not a recommendation, for the
+first several minutes.
+Create the `Off`-mode VPA in Module 3 as early as you can, start load, and
+move on to the discussion while it accumulates samples.
+Check `RecommendationProvided` in the VPA's conditions before showing numbers.
+
+=== The two defaults that make VPA look broken
+
+* `minReplicas` on the `VerticalPodAutoscalerController` defaults to 2, so a
+one-replica Deployment is never touched in any mode but `Off`. The setup
+requirements patch it to 1; say why, because attendees will hit this on their
+own clusters.
+* `podMinMemoryMb` defaults to 250, so recommendations never go below 250 Mi
+no matter how little the app uses.
+
+=== The updater's 12-hour rule
+
+The VPA updater acts within a minute or two only when a pod's request is
+outside the recommendation's bounds (Module 4, Exercise 2 relies on this: the
+Module 1 sizing is far below the lower bound).
+A pod that is inside the bounds isn't touched until it's 12 hours old.
+After any rollout, the admission controller sizes the new pod at the target,
+which puts it inside the bounds, so the updater goes quiet.
+Module 4, Exercise 4 drives the resize by hand with the `resize` subresource
+for that reason; use the same trick anywhere the updater is slower than the
+room.
+
+=== Module 4 is the point of the workshop
+
+If time is short, cut Exercise 2 of Module 1 and the `oc` metric queries in
+Module 2 (use the console instead), but don't cut Module 4's Exercise 3.
+Watching a memory resize land while `maxHeap` stays the same is the thing
+attendees remember.
+
+=== Common mistakes
+
+* Putting the `inject-java` annotation on the Deployment's metadata instead of
+the pod template. Nothing happens; look at the pod's YAML for the init
+container.
+* `JAVA_TOOL_OPTIONS` set in the image's `ENTRYPOINT`. The Operator's
+`-javaagent` value replaces it and `MaxRAMPercentage` disappears. Set JVM
+flags in the pod spec.
+* Running the `curl` checks against a pod that is mid-resize or mid-restart.
+Wait for `oc get pod` to show `Running` with `RESIZE` empty.
+* Attendees sharing one project. Each attendee or pair needs their own
+`java-vpa-<name>` project, or the single-replica demo pod gets fought over.
+
+=== Recovering
+
+If the sample pod is wedged, delete it; the Deployment recreates it in a few
+seconds and the VPA admission controller sizes the replacement.
+If the VPA status looks stale, delete and recreate the VPA; history resets but
+it's a two-minute wait, not a session-ending one.

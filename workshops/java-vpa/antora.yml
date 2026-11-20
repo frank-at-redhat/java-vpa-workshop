@@ -1,0 +1,14 @@
+# Used only when this workshop is built alone (preview.sh --workshop java-vpa):
+# in the full site, content/antora.yml provides the title, nav and attributes.
+name: ROOT
+title: "Right-Sizing Java on OpenShift: VPA and OpenTelemetry"
+version: ~
+nav:
+  - modules/java-vpa/nav.adoc
+
+asciidoc:
+  attributes:
+    lab_name: "Right-Sizing Java on OpenShift: VPA and OpenTelemetry"
+    page-pagination: true
+    tabs-sync-option: ''
+    page-links: []

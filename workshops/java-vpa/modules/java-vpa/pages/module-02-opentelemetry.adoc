@@ -1,0 +1,282 @@
+= Observability with OpenTelemetry
+
+This module stands up the Red Hat build of OpenTelemetry, injects the Java
+agent into the sample app without rebuilding it, and lands JVM metrics in the
+cluster's monitoring stack.
+The point of doing this *before* VPA: a recommendation is only trustworthy if
+you can see whether it's tracking real demand or chasing garbage collection.
+
+.Exercises on this page
+* <<exercise-1>>
+* <<exercise-2>>
+* <<exercise-3>>
+
+== The pieces
+
+[cols="1,3",options="header"]
+|===
+|Component |Role
+
+|`OpenTelemetryCollector` CR
+|The Operator turns it into a Collector Deployment. Ours receives OTLP from
+the agent and re-exposes metrics on a Prometheus endpoint.
+
+|`Instrumentation` CR
+|Describes how to auto-instrument a language. For Java, the Operator adds an
+init container that copies the agent jar into the pod and sets
+`JAVA_TOOL_OPTIONS=-javaagent:...`.
+
+|Pod annotation
+|`instrumentation.opentelemetry.io/inject-java: "true"` on the pod template
+opts a workload in. No image change, no code change.
+
+|User workload monitoring
+|The in-cluster Prometheus scrapes the Collector's `prometheus` port via a
+`ServiceMonitor`, so the metrics show up in the console under *Observe*.
+|===
+
+== The agent is not free
+
+The Java agent instruments at class-load time by rewriting bytecode.
+Its cost is real and worth measuring, which is why the sample
+`Instrumentation` turns off everything except runtime telemetry:
+
+* Startup: typically 1 to 3 seconds longer, more with large classpaths
+* Memory: tens of MiB of extra metaspace and code cache (non-heap, so it comes
+out of the `MaxRAMPercentage` headroom)
+* CPU: usually under 5% with sampling on; higher with full tracing on a
+chatty service
+
+The practical rule: enable instrumentation per library, not everything, and
+re-check the pod's memory usage after turning it on.
+
+[#exercise-1]
+== Exercise 1: Deploy the Collector
+
+. Create the Collector and the `ServiceMonitor` that exposes its output to
+user workload monitoring:
++
+[source,yaml]
+----
+include::example$otel-collector.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc apply -f otel-collector.yaml
+----
+
+. Wait for it:
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/otel-collector
+----
+
+. Confirm the Operator created the Service with the ports the agent and the
+`ServiceMonitor` need:
++
+[source,bash,role=execute]
+----
+oc get svc otel-collector -o wide
+----
++
+Ports `4317`, `4318` and `8889` (named `prometheus`) are listed.
+
+. The Collector image has no shell or `curl`, so check its Prometheus endpoint
+from your workstation through a port-forward:
++
+[source,bash,role=execute]
+----
+oc port-forward svc/otel-collector 8889:8889 &
+----
++
+[source,bash,role=execute]
+----
+curl -s localhost:8889/metrics | head -5
+----
++
+It prints Prometheus-format output (only the Collector's own metrics until the
+agent starts sending).
+Leave the port-forward running; Exercise 3 uses it.
+
+[#exercise-2]
+== Exercise 2: Inject the Java agent
+
+. Create the `Instrumentation`:
++
+[source,yaml]
+----
+include::example$otel-instrumentation.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc apply -f otel-instrumentation.yaml
+----
++
+[IMPORTANT]
+====
+The exporter endpoint is port `4318`, not `4317`.
+Java agent 2.x defaults to OTLP over `http/protobuf`; pointed at the gRPC
+port it fails every export, silently from the Collector's point of view, and
+you see no JVM metrics at all.
+====
+
+. Opt the sample app in with the annotation. It goes on the *pod template*,
+not the Deployment's own metadata:
++
+[source,bash,role=execute]
+----
+oc patch deploy/load --type merge --patch \
+  '{"spec":{"template":{"metadata":{"annotations":
+  {"instrumentation.opentelemetry.io/inject-java":"true"}}}}}'
+----
+
+. Watch the rollout, then look at what the Operator added:
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/load
+----
++
+[source,bash,role=execute]
+----
+oc get pod -l app=load \
+  -o jsonpath='{.items[0].spec.initContainers[*].name}'
+----
++
+An init container named `opentelemetry-auto-instrumentation-java` is present.
+Its image is the upstream `ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java`
+agent; the Operator picks it by default when `spec.java.image` isn't set.
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- sh -c 'echo $JAVA_TOOL_OPTIONS'
+----
++
+The Operator *appended* `-javaagent:/otel-auto-instrumentation-java-load/javaagent.jar`
+(the path includes the container name) to the value we set in Module 1.
+`MaxRAMPercentage` is still there.
+
+[NOTE]
+====
+If `JAVA_TOOL_OPTIONS` were set in the image's `ENTRYPOINT` or a script
+instead of the pod spec, the Operator's value would be the only one and
+`MaxRAMPercentage` would be gone.
+Set JVM flags in the pod spec, where the platform can see and merge them.
+====
+
+[#exercise-3]
+== Exercise 3: Read the JVM metrics
+
+. Generate some activity so there's something to look at:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=200'
+----
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/cpu?t=2&s=120'
+----
+
+. See the JVM metrics as the Collector exposes them, through the port-forward
+from Exercise 1:
++
+[source,bash,role=execute]
+----
+curl -s localhost:8889/metrics | grep '^jvm_' | cut -d'{' -f1 | sort -u
+----
++
+These are the names the queries below use.
+
+. In the console, open *Observe* -> *Metrics* in the `java-vpa` project and
+run each of these.
+Attendees can also use `oc`:
++
+[source,bash,role=execute]
+----
+TOKEN=$(oc whoami -t)
+----
++
+[source,bash,role=execute]
+----
+HOST=$(oc get route thanos-querier \
+  -n openshift-monitoring -o jsonpath='{.spec.host}')
+----
++
+[source,bash,role=execute]
+----
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://$HOST/api/v1/query" \
+  --data-urlencode 'query=jvm_memory_used_bytes{jvm_memory_type="heap"}' \
+  | jq '.data.result[] | {pool: .metric.jvm_memory_pool_name, v: .value[1]}'
+----
+
+. The queries that matter for sizing, and what each one tells you:
++
+[cols="2,3",options="header"]
+|===
+|Query |Why it matters
+
+|`sum(jvm_memory_used_bytes{jvm_memory_type="heap"})`
+|Live heap. Compare to `container_memory_working_set_bytes` to see how much
+of the container's usage is heap versus everything else.
+
+|`sum(jvm_memory_used_bytes{jvm_memory_type="non_heap"})`
+|Metaspace, code cache, compressed class space. This is the part
+`MaxRAMPercentage` doesn't bound. If it's growing, you have a classloader
+leak, not a heap problem.
+
+|`sum(rate(jvm_gc_duration_seconds_sum[5m]))`
+|Fraction of wall time spent in GC. Above a few percent, the heap is too
+small for the allocation rate *or* the CPU limit is starving the collector.
+
+|`jvm_thread_count`
+|Each thread is stack space outside the heap. Multiply by the stack size.
+
+|`jvm_cpu_recent_utilization_ratio`
+|CPU use as the JVM sees it, relative to `availableProcessors()`. Pair it
+with `container_cpu_cfs_throttled_periods_total` from kubelet metrics.
+
+|`jvm_memory_limit_bytes{jvm_memory_type="heap"}`
+|The JVM's own max heap, as it computed it from `MaxRAMPercentage` at
+startup. Compare to the container's memory limit. Module 4 watches this one
+*not* change during a resize.
+
+|`jvm_cpu_count`
+|`availableProcessors()` as a time series. Unlike the heap limit, this one
+does follow a CPU resize.
+|===
+
+. Open the dashboard. In the console, *Observe* -> *Dashboards*, choose
+*Java Right-Sizing: VPA and JVM*, and set *Namespace* to your project.
+The *Memory* panel shows four lines: the container limit, its working set,
+the JVM's max heap and the heap in use.
+The gap between working set and heap used is non-heap plus the agent.
+Keep this tab open for the rest of the workshop; every resize and restart
+from Module 4 shows up here as a step.
+
+. Now the comparison that sets up Module 3. Run both and note the gap:
++
+[source,promql]
+----
+sum(container_memory_working_set_bytes{
+  namespace="java-vpa", container="load"})
+----
++
+[source,promql]
+----
+sum(jvm_memory_used_bytes{jvm_memory_type="heap"})
+----
++
+The difference is non-heap plus the agent itself.
+On this tiny app it's a large fraction of the total.
+On a real Spring Boot service with 10,000 classes it's often 150 to 300 MiB.
+That gap is what VPA is sizing, and the JVM can't see it.
+
+== Clean Up
+
+Nothing to clean up: the next module uses this setup as-is.

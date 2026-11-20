@@ -1,0 +1,12 @@
+# The honest version for a heap-bound JVM: CPU in place, memory via restart,
+# so a new memory limit actually becomes a new MaxRAMPercentage heap.
+spec:
+  template:
+    spec:
+      containers:
+        - name: load
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: RestartContainer

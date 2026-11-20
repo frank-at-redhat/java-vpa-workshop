@@ -1,0 +1,369 @@
+= In-Place Resize
+
+This module switches the VPA to `InPlaceOrRecreate`, watches a CPU resize
+land on a running pod without a restart, then shows why a memory resize
+doesn't do what people expect for a heap-bound JVM, and how to configure the
+honest version.
+
+.Exercises on this page
+* <<exercise-1>>
+* <<exercise-2>>
+* <<exercise-3>>
+* <<exercise-4>>
+
+== How in-place resize works
+
+On OpenShift 4.22, a pod's `resources` can be changed through the `resize`
+subresource.
+The kubelet updates the container's cgroup limits in place.
+Whether the container is *restarted* as part of that is decided per resource
+by the container's `resizePolicy`:
+
+[source,yaml]
+----
+resizePolicy:
+  - resourceName: cpu
+    restartPolicy: NotRequired
+  - resourceName: memory
+    restartPolicy: RestartContainer
+----
+
+`NotRequired` is the default.
+Anyone with `patch` on pods can trigger a resize directly through the
+subresource, as Exercise 4 does; the VPA updater is just one client of it.
+A VPA in `InPlaceOrRecreate` mode honors this policy: it resizes in place
+where it can, restarts the container where the policy says so, and evicts the
+whole pod only if the kubelet reports the resize as infeasible (for example,
+the node doesn't have the room).
+
+Limits worth knowing:
+
+* Only CPU and memory can be resized.
+* The pod's QoS class can't change. A `Burstable` pod stays `Burstable`, so
+VPA can't resize requests up to equal limits and make it `Guaranteed`.
+* Memory *decreases* in place are allowed, but the kubelet refuses if the
+container's current usage is above the new limit.
+* Static CPU or memory manager policies on the node restrict what can
+change.
+* The resize is an admission request like any other, so a namespace
+`ResourceQuota` can reject it. The pod keeps its old size and the only
+signal is an event; Module 5 covers sizing quota for VPA.
+
+== The heap catch
+
+CPU resize is clean for the JVM: the cgroup quota changes, the kernel stops
+throttling, and the next `Runtime.availableProcessors()` call reports the new
+count.
+Thread pools sized at startup don't grow, but GC and JIT pick up the new
+headroom.
+
+Memory is different.
+The cgroup limit changes, but the JVM read `MaxRAMPercentage` *once*, at
+startup.
+The max heap is fixed.
+So a memory resize from 512 Mi to 1 Gi gives a running JVM:
+
+* 512 Mi more room for non-heap (metaspace, threads, direct buffers)
+* Zero more heap
+
+If the app was OOMKilled because non-heap grew, the resize fixes it.
+If it was throwing `OutOfMemoryError` because the heap was full, the resize
+changes nothing until the container restarts.
+This is why the memory `resizePolicy` for a heap-bound JVM should usually be
+`RestartContainer`, and why "VPA resized my pod and it still OOMs" is the
+most common ticket after turning this on.
+
+[#exercise-1]
+== Exercise 1: Add a resize policy and switch modes
+
+. Add the resize policy to the Deployment. Start with `NotRequired` for both
+resources, which is the default and the tempting choice:
++
+[source,yaml]
+----
+include::example$resize-policy-patch.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc patch deploy/load --patch-file resize-policy-patch.yaml
+----
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/load
+----
++
+Changing `resizePolicy` changes the pod template, so this is a normal
+rollout: a new pod.
+
+. Note the pod name, its restart count and its limits. Every later step
+compares against these:
++
+[source,bash,role=execute]
+----
+COLS=NAME:.metadata.name
+COLS=$COLS,RESTARTS:.status.containerStatuses[0].restartCount
+COLS=$COLS,CPU_LIM:.spec.containers[0].resources.limits.cpu
+COLS=$COLS,MEM_LIM:.spec.containers[0].resources.limits.memory
+COLS=$COLS,RESIZE:.status.resize
+----
++
+[source,bash,role=execute]
+----
+oc get pod -l app=load -o custom-columns=$COLS
+----
++
+[source,text]
+----
+NAME                    RESTARTS   CPU_LIM   MEM_LIM   RESIZE
+load-66d8dd45cb-snk2b   0          500m      512Mi     <none>
+----
+
+. Switch the VPA to `InPlaceOrRecreate`:
++
+[source,yaml]
+----
+include::example$vpa-inplace.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc apply -f vpa-inplace.yaml
+----
+
+[#exercise-2]
+== Exercise 2: Watch a resize land
+
+. Drive CPU so the recommendation sits well above the current `500m` limit:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/cpu?t=4&s=900'
+----
+
+. Watch the pod. The updater runs about once a minute and acts quickly here
+because the current `100m` request is *below* the recommendation's lower
+bound:
++
+[source,bash,role=execute]
+----
+watch -n 15 "oc get pod -l app=load -o custom-columns=$COLS"
+----
++
+Within a couple of minutes both limits change in one step.
+The pod name and `RESTARTS` don't.
+`RESIZE` may flash `InProgress`; it clears within seconds, so you'll often
+miss it.
++
+[source,text]
+----
+NAME                    RESTARTS   CPU_LIM   MEM_LIM      RESIZE
+load-66d8dd45cb-snk2b   0          2935m     1097723272   <none>
+----
++
+[NOTE]
+====
+`2935m` is not the `cpu: 2` target times the Deployment's 5:1 limit ratio.
+VPA scales limits proportionally to the recommended request and caps them,
+and in testing the in-place path and the admission path produced different
+limits for the same target (`2935m` here; `10` on a fresh pod).
+Treat the limit VPA sets as "proportional, roughly" and keep memory
+request:limit at 1:1, as Module 5 recommends, so at least memory is exact.
+====
+
+. Ask the JVM:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s localhost:8080/
+----
++
+[source,text]
+----
+availableProcessors=3 maxHeap=371MiB totalHeap=31MiB used=14MiB
+----
++
+`availableProcessors` went from 1 to 3 (`2935m` rounds up).
+`maxHeap` is still 371 MiB on a container whose limit is now 1047 MiB.
+
+. The same thing as graphs. On the dashboard from Module 2, the *CPU*
+panel shows *container limit* and *availableProcessors()* both step up at
+the resize. On the *Memory* panel, *container limit* steps up and *JVM max
+heap* stays flat.
+That flat line is the next exercise.
+
+[TIP]
+====
+*If the updater hasn't acted after three minutes*, don't wait on it; do the
+resize by hand so the session keeps moving. Same mechanism, same kubelet
+behavior:
+
+[source,bash,role=execute]
+----
+POD=$(oc get pod -l app=load -o jsonpath='{.items[0].metadata.name}')
+----
+
+[source,bash,role=execute]
+----
+oc patch pod $POD --subresource resize --patch \
+  '{"spec":{"containers":[{"name":"load","resources":
+  {"requests":{"cpu":"2","memory":"512Mi"},
+   "limits":{"cpu":"3","memory":"1Gi"}}}]}}'
+----
+====
+
+[#exercise-3]
+== Exercise 3: Prove the heap didn't grow
+
+. Retain heap up to the *old* max. It fits, because 300 MiB is under 371:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=300'
+----
++
+[source,text]
+----
+retained 300 MiB
+availableProcessors=3 maxHeap=371MiB totalHeap=332MiB used=314MiB
+----
+
+. Now retain a little more. The container has over a gigabyte; the JVM has
+57 MiB left:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=100'
+----
++
+[source,text]
+----
+command terminated with exit code 137
+----
++
+`OutOfMemoryError`, and because of `-XX:+ExitOnOutOfMemoryError` the JVM
+exits mid-request. The kubelet restarts the *container*; the pod stays.
+
+. Confirm, then ask the restarted JVM what it sees:
++
+[source,bash,role=execute]
+----
+oc get pod -l app=load -o custom-columns=$COLS
+----
++
+[source,text]
+----
+NAME                    RESTARTS   CPU_LIM   MEM_LIM      RESIZE
+load-66d8dd45cb-snk2b   1          2935m     1097723272   <none>
+----
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s localhost:8080/
+----
++
+[source,text]
+----
+availableProcessors=3 maxHeap=759MiB totalHeap=27MiB used=22MiB
+----
++
+Same pod, one restart, and *now* `maxHeap` is 759 MiB: 75% of the limit it
+re-read on startup.
+The resize "worked", one crash later.
+That crash is what `RestartContainer` on memory turns into a controlled
+restart.
+
+[#exercise-4]
+== Exercise 4: The honest configuration
+
+. Change the memory policy to `RestartContainer`:
++
+[source,yaml]
+----
+include::example$resize-policy-restart-memory.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc patch deploy/load \
+  --patch-file resize-policy-restart-memory.yaml
+----
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/load
+----
++
+This rolls a new pod, and the VPA admission controller sizes it to the
+current recommendation on the way in.
+
+. The VPA updater won't demonstrate this one for you in the next few
+minutes, and it's worth saying why.
+It acts quickly only when a pod's request is *outside* the recommendation
+bounds.
+The new pod was admitted at the target, so it's inside the bounds, and for
+in-bounds pods the updater waits until the pod is 12 hours old before
+touching it (the `--in-recommendation-bounds-eviction-lifetime-threshold`).
+That's the right behavior in production and the wrong one for a demo, so
+drive the resize by hand. The kubelet applies the `resizePolicy` the same
+way regardless of who asked:
++
+[source,bash,role=execute]
+----
+POD=$(oc get pod -l app=load -o jsonpath='{.items[0].metadata.name}')
+----
++
+[source,bash,role=execute]
+----
+oc get pod $POD -o custom-columns=$COLS
+----
++
+[source,bash,role=execute]
+----
+oc patch pod $POD --subresource resize --patch \
+  '{"spec":{"containers":[{"name":"load","resources":
+  {"requests":{"memory":"1536Mi"},"limits":{"memory":"1536Mi"}}}]}}'
+----
+
+. Watch it, then ask the JVM:
++
+[source,bash,role=execute]
+----
+oc get pod $POD -o custom-columns=$COLS
+----
++
+Same pod name, `MEM_LIM` is `1536Mi`, and `RESTARTS` went up by one: the
+kubelet restarted the container to apply the memory change, as the policy
+says.
++
+[source,bash,role=execute]
+----
+oc exec $POD -c load -- curl -s localhost:8080/
+----
++
+`maxHeap` is now about 1152 MiB (75% of 1536), with no `OutOfMemoryError`
+on the way there.
+On the dashboard, *JVM max heap* steps up here, and *Container restarts*
+ticks up with it; compare with Exercise 3, where the restart came from an
+OOM instead of a policy.
+
+[NOTE]
+====
+*Instructor:* this is the trade-off slide.
+`RestartContainer` on memory gives you a correct heap at the cost of a
+restart, which for a single-replica service is an outage of a few seconds.
+`NotRequired` gives you a no-downtime resize that only helps non-heap.
+There isn't a free option; pick per workload.
+The decision tree in Module 5 encodes this.
+====
+
+== Clean Up
+
+Delete the VPA so the Deployment stops being modified, but leave the app and
+the Collector for the wrap-up discussion:
+
+[source,bash,role=execute]
+----
+oc delete vpa load
+----

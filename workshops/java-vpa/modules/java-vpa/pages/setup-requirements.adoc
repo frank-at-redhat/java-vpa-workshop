@@ -1,0 +1,170 @@
+= Right-Sizing Java on OpenShift: Setup Requirements
+
+This page lists everything needed to run the Right-Sizing Java on OpenShift
+workshop.
+The instructor prepares the cluster and accounts ahead of time; attendees prepare
+their workstations.
+
+== Cluster
+
+[cols="1,3",options="header"]
+|===
+|Item |Requirement
+
+|Platform
+|OpenShift Container Platform 4.22 (Kubernetes 1.35). In-place pod resize must
+be available; it is on by default at this version.
+
+|Size
+|One shared cluster. Each attendee or pair needs a project with roughly 4 vCPU
+and 8 GiB of memory of quota. The sample app runs one pod; the Collector runs
+one more.
+
+|Monitoring
+|User workload monitoring enabled, so the Collector's Prometheus endpoint can
+be scraped and queried from the console.
+|===
+
+== Operators and Cluster Components
+
+[cols="1,1,2",options="header"]
+|===
+|Component |Installed by |Used in
+
+|Vertical Pod Autoscaler Operator
+|The facilitator, before the workshop
+|Modules 3 and 4
+
+|Red Hat build of OpenTelemetry Operator
+|The facilitator, before the workshop
+|Module 2 onward
+
+|User workload monitoring (`enableUserWorkload: true`)
+|The facilitator, before the workshop
+|Modules 2 to 4
+|===
+
+== Attendee Workstation
+
+[cols="1,1,2",options="header"]
+|===
+|Tool |Version |Used for
+
+|`oc`
+|Matching the cluster version
+|Every module
+
+|`jq`
+|Any recent
+|Reading VPA status and pod resource output
+|===
+
+== Attendee Accounts, Projects and Roles
+
+Each attendee needs a cluster user with `admin` on their own project.
+Creating `VerticalPodAutoscaler`, `OpenTelemetryCollector` and `Instrumentation`
+objects in a project needs no cluster-level role once the Operators are
+installed.
+
+The facilitator needs `cluster-admin` to install the Operators, enable user
+workload monitoring, and (optionally) tune the `VerticalPodAutoscalerController`
+so recommendations arrive quickly enough for a two-hour session.
+
+== Network and Image Access
+
+The exercises pull:
+
+* `registry.access.redhat.com/ubi9/openjdk-21` (the sample app's JDK)
+* The Red Hat build of OpenTelemetry Collector image from `registry.redhat.io`
+* The Java auto-instrumentation agent, which the Operator pulls from
+`ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java`
+
+The cluster is connected, so no mirroring is required.
+
+== Facilitator Pre-Flight
+
+. Install the Vertical Pod Autoscaler Operator from OperatorHub into
+`openshift-vertical-pod-autoscaler`.
+. Install the Red Hat build of OpenTelemetry Operator from OperatorHub.
+. Enable user workload monitoring:
++
+[source,bash,role=execute]
+----
+oc apply -f - <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+YAML
+----
+
+. Lower the VPA Operator's minimum replica count so a single-replica demo pod
+can be updated, and shorten the recommender's safety margin for a faster
+demo:
++
+[source,bash,role=execute]
+----
+oc patch VerticalPodAutoscalerController default \
+  --namespace openshift-vertical-pod-autoscaler \
+  --type merge \
+  --patch '{"spec":{"minReplicas":1,"safetyMarginFraction":0.15}}'
+----
++
+[NOTE]
+====
+The default `minReplicas` is 2. Without this change, a VPA in any mode other
+than `Off` never acts on a one-replica Deployment. Say this out loud during
+the workshop; it's a common "VPA isn't doing anything" root cause.
+====
+
+. Install the console dashboard. It's a ConfigMap in
+`openshift-config-managed`, so this needs `cluster-admin`; attendees then
+see it under *Observe* -> *Dashboards* as *Java Right-Sizing: VPA and JVM*:
++
+[source,bash,role=execute]
+----
+oc apply -f console-dashboard.yaml
+----
++
+The file is in this workshop's `downloads/` folder.
+Panels are filtered by a namespace variable that matches `java-vpa.*`, so
+name attendee projects with that prefix.
+
+== Verification Checklist
+
+Each attendee runs these before the workshop starts.
+
+. Check that you are logged in to the cluster:
++
+[source,bash,role=execute]
+----
+oc whoami
+----
++
+It prints your user name.
+
+. Check that the two Operators are installed:
++
+[source,bash,role=execute]
+----
+oc get csv --all-namespaces | grep -Ei 'vertical|opentelemetry'
+----
++
+Both show `Succeeded`.
+
+. Check that the dashboard is installed. In the console, open *Observe* ->
+*Dashboards* and pick *Java Right-Sizing: VPA and JVM* from the dropdown.
+It renders (empty until Module 2 produces data).
+
+. Check that in-place resize is available:
++
+[source,bash,role=execute]
+----
+oc explain pod.spec.containers.resizePolicy
+----
++
+It prints the field's description rather than an error.

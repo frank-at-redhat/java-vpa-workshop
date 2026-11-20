@@ -1,0 +1,26 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: java
+spec:
+  exporter:
+    # The Java agent (2.x) speaks OTLP over http/protobuf by default,
+    # so this must be the HTTP port, not the gRPC port 4317.
+    endpoint: http://otel-collector:4318
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    type: parentbased_traceidratio
+    argument: "0.1"
+  java:
+    env:
+      - name: OTEL_METRICS_EXPORTER
+        value: otlp
+      - name: OTEL_METRIC_EXPORT_INTERVAL
+        value: "15000"
+      # Keep the agent's own footprint small for the demo.
+      - name: OTEL_INSTRUMENTATION_COMMON_DEFAULT_ENABLED
+        value: "false"
+      - name: OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED
+        value: "true"

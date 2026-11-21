@@ -108,7 +108,10 @@ container.
 `-javaagent` value replaces it and `MaxRAMPercentage` disappears. Set JVM
 flags in the pod spec.
 * Running the `curl` checks against a pod that is mid-resize or mid-restart.
-Wait for `oc get pod` to show `Running` with `RESIZE` empty.
+Wait for `oc get pod` to show `Running` and `1/1` ready.
+* Retaining heap twice without freeing it. `/alloc` is cumulative, so two
+calls that each fit can together exceed the heap and exit the JVM.
+`/free` drops what is retained.
 * Attendees sharing one project. Each attendee or pair needs their own
 `java-vpa-<name>` project, or the single-replica demo pod gets fought over.
 

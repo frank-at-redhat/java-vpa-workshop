@@ -211,8 +211,31 @@ oc set env deploy/load \
   JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 ----
 +
-Now the same `/alloc` call ends in a Java `OutOfMemoryError` with a stack
-trace, and the JVM exits on its own terms.
+Now the same `/alloc` call ends in a Java `OutOfMemoryError`, and the JVM
+exits on its own terms.
+The `oc exec` still reports exit code 137, so the difference is in the log
+of the container that exited:
++
+[source,bash,role=execute]
+----
+oc rollout status deploy/load
+----
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=600'
+----
++
+[source,bash,role=execute]
+----
+oc logs deploy/load -c load --previous | tail -1
+----
++
+[source,text]
+----
+Terminating due to java.lang.OutOfMemoryError: Java heap space
+----
++
 Same crash, but a diagnosable one.
 
 [NOTE]

@@ -52,7 +52,8 @@ be scraped and queried from the console.
 
 |`oc`
 |Matching the cluster version
-|Every module
+|Every module. An older client fails in Module 4: `oc` 4.18 rejects
+`--subresource resize`.
 
 |`jq`
 |Any recent
@@ -61,10 +62,28 @@ be scraped and queried from the console.
 
 == Attendee Accounts, Projects and Roles
 
-Each attendee needs a cluster user with `admin` on their own project.
-Creating `VerticalPodAutoscaler`, `OpenTelemetryCollector` and `Instrumentation`
-objects in a project needs no cluster-level role once the Operators are
-installed.
+Each attendee needs a cluster user with these roles:
+
+[cols="1,1,2",options="header"]
+|===
+|Role |Scope |Needed for
+
+|`admin`
+|Their own project
+|Every module. It covers `VerticalPodAutoscaler`, `OpenTelemetryCollector`
+and `Instrumentation` objects and the pod `resize` subresource once the
+Operators are installed.
+
+|`monitoring-edit`
+|Their own project
+|Module 2. `admin` does not allow creating the `ServiceMonitor` that exposes
+the Collector to user workload monitoring.
+
+|`cluster-monitoring-view`
+|Cluster
+|Module 2 onward. Without it the Thanos Querier route answers `Forbidden`
+to the metric queries.
+|===
 
 The facilitator needs `cluster-admin` to install the Operators, enable user
 workload monitoring, and (optionally) tune the `VerticalPodAutoscalerController`
@@ -103,15 +122,14 @@ YAML
 ----
 
 . Lower the VPA Operator's minimum replica count so a single-replica demo pod
-can be updated, and shorten the recommender's safety margin for a faster
-demo:
+can be updated:
 +
 [source,bash,role=execute]
 ----
 oc patch VerticalPodAutoscalerController default \
   --namespace openshift-vertical-pod-autoscaler \
   --type merge \
-  --patch '{"spec":{"minReplicas":1,"safetyMarginFraction":0.15}}'
+  --patch '{"spec":{"minReplicas":1}}'
 ----
 +
 [NOTE]
@@ -134,6 +152,30 @@ The file is in this workshop's `downloads/` folder.
 Panels are filtered by a namespace variable that matches `java-vpa.*`, so
 name attendee projects with that prefix.
 
+. Give each attendee the monitoring roles on top of `admin` on their project.
+Set the user and project first:
++
+[source,bash]
+----
+ATTENDEE=<user>
+----
++
+[source,bash]
+----
+PROJECT=<project>
+----
++
+[source,bash,role=execute]
+----
+oc adm policy add-role-to-user monitoring-edit $ATTENDEE \
+  --namespace $PROJECT
+----
++
+[source,bash,role=execute]
+----
+oc adm policy add-cluster-role-to-user cluster-monitoring-view $ATTENDEE
+----
+
 == Verification Checklist
 
 Each attendee runs these before the workshop starts.
@@ -151,10 +193,11 @@ It prints your user name.
 +
 [source,bash,role=execute]
 ----
-oc get csv --all-namespaces | grep -Ei 'vertical|opentelemetry'
+oc api-resources | grep -E 'verticalpodautoscalers|opentelemetrycollectors'
 ----
 +
-Both show `Succeeded`.
+It prints one line for each: the resource types the two Operators add.
+This works without `cluster-admin`, unlike listing the Operators themselves.
 
 . Check that the dashboard is installed. In the console, open *Observe* ->
 *Dashboards* and pick *Java Right-Sizing: VPA and JVM* from the dropdown.

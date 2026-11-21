@@ -36,8 +36,8 @@ It weights recent samples more heavily, but a brand-new VPA on a brand-new pod
 gives you the controller's minimums, not a recommendation.
 Plan on 8 to 24 hours of representative traffic before trusting it on a real
 workload.
-For the workshop, the facilitator lowered the safety margin and we'll wait a
-few minutes.
+For the workshop we'll wait a few minutes and treat the numbers as a first
+estimate.
 
 [NOTE]
 ====
@@ -139,6 +139,14 @@ oc get vpa load -o jsonpath='{.status.conditions}' | jq
 [#exercise-2]
 == Exercise 2: Drive load and watch the recommendation move
 
+. Drop the heap that Module 2 retained. `/alloc` is cumulative, and another
+250 MiB on top of those 200 would exceed the 371 MiB heap and exit the JVM:
++
+[source,bash,role=execute]
+----
+oc exec deploy/load -c load -- curl -s localhost:8080/free
+----
+
 . Add retained heap, then CPU, and keep the recommendation and the JVM
 metrics from Module 2 side by side:
 +
@@ -162,10 +170,12 @@ watch -n 30 "oc get vpa load \
 ----
 +
 The memory target climbs toward the working set.
-The CPU target climbs past the `500m` limit because the four spinning
-threads want four cores and are being throttled to one.
-It will likely hit `maxAllowed` (2 cores) within a few minutes; the
-`uncappedTarget` shows what it wanted.
+The CPU target settles a little above the `500m` limit, near `587m`, and
+stays there.
+The four spinning threads want four cores, but the recommender sees usage,
+not demand, and the limit throttles usage to half a core.
+Only `upperBound` reaches `maxAllowed` (2 cores).
+Module 4 lifts the limit, and the target follows.
 
 . Now the question that justifies Module 2. The memory target is larger than
 the heap in use. Is the extra:

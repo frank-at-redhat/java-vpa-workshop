@@ -96,8 +96,8 @@ oc port-forward svc/otel-collector 8889:8889 &
 curl -s localhost:8889/metrics | head -5
 ----
 +
-It prints Prometheus-format output (only the Collector's own metrics until the
-agent starts sending).
+It prints nothing yet, and no error: this port serves only the metrics the
+Collector has received, and no agent is sending.
 Leave the port-forward running; Exercise 3 uses it.
 
 [#exercise-2]

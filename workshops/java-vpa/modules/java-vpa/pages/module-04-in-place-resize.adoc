@@ -106,7 +106,6 @@ COLS=NAME:.metadata.name
 COLS=$COLS,RESTARTS:.status.containerStatuses[0].restartCount
 COLS=$COLS,CPU_LIM:.spec.containers[0].resources.limits.cpu
 COLS=$COLS,MEM_LIM:.spec.containers[0].resources.limits.memory
-COLS=$COLS,RESIZE:.status.resize
 ----
 +
 [source,bash,role=execute]
@@ -116,8 +115,8 @@ oc get pod -l app=load -o custom-columns=$COLS
 +
 [source,text]
 ----
-NAME                    RESTARTS   CPU_LIM   MEM_LIM   RESIZE
-load-66d8dd45cb-snk2b   0          500m      512Mi     <none>
+NAME                    RESTARTS   CPU_LIM   MEM_LIM
+load-66d8dd45cb-snk2b   0          500m      512Mi
 ----
 
 . Switch the VPA to `InPlaceOrRecreate`:
@@ -135,7 +134,8 @@ oc apply -f vpa-inplace.yaml
 [#exercise-2]
 == Exercise 2: Watch a resize land
 
-. Drive CPU so the recommendation sits well above the current `500m` limit:
+. Keep CPU busy so the recommendation stays above the pod's current `100m`
+request:
 +
 [source,bash,role=execute]
 ----
@@ -153,24 +153,37 @@ watch -n 15 "oc get pod -l app=load -o custom-columns=$COLS"
 +
 Within a couple of minutes both limits change in one step.
 The pod name and `RESTARTS` don't.
-`RESIZE` may flash `InProgress`; it clears within seconds, so you'll often
-miss it.
+Your memory figure differs a little from the sample; it follows your
+recommendation.
 +
 [source,text]
 ----
-NAME                    RESTARTS   CPU_LIM   MEM_LIM      RESIZE
-load-66d8dd45cb-snk2b   0          2935m     1097723272   <none>
+NAME                    RESTARTS   CPU_LIM   MEM_LIM
+load-66d8dd45cb-snk2b   0          2935m     1097723272
 ----
 +
 [NOTE]
 ====
-`2935m` is not the `cpu: 2` target times the Deployment's 5:1 limit ratio.
-VPA scales limits proportionally to the recommended request and caps them,
-and in testing the in-place path and the admission path produced different
-limits for the same target (`2935m` here; `10` on a fresh pod).
-Treat the limit VPA sets as "proportional, roughly" and keep memory
-request:limit at 1:1, as Module 5 recommends, so at least memory is exact.
+`2935m` is the `587m` CPU target from Module 3 times the Deployment's 5:1
+limit-to-request ratio, and the memory limit is twice the memory target for
+the same reason.
+`controlledValues: RequestsAndLimits` keeps those ratios exactly.
+`maxAllowed` caps the request, not the limit: with the throttle gone the CPU
+target climbs to 2 cores, and the pod that Exercise 4 creates gets a limit
+of `10`.
+Keep CPU limits close to requests, or leave them off, if that surprises you.
 ====
+
+. See who resized it. The updater and the kubelet each record an event:
++
+[source,bash,role=execute]
+----
+oc get events --sort-by=.lastTimestamp | grep -i resize
+----
++
+`InPlaceResizedByVPA` comes from the updater; `ResizeStarted` and
+`ResizeCompleted` come from the kubelet and carry the new requests and
+limits.
 
 . Ask the JVM:
 +
@@ -254,8 +267,8 @@ oc get pod -l app=load -o custom-columns=$COLS
 +
 [source,text]
 ----
-NAME                    RESTARTS   CPU_LIM   MEM_LIM      RESIZE
-load-66d8dd45cb-snk2b   1          2935m     1097723272   <none>
+NAME                    RESTARTS   CPU_LIM   MEM_LIM
+load-66d8dd45cb-snk2b   1          2935m     1097723272
 ----
 +
 [source,bash,role=execute]
@@ -342,8 +355,8 @@ says.
 oc exec $POD -c load -- curl -s localhost:8080/
 ----
 +
-`maxHeap` is now about 1152 MiB (75% of 1536), with no `OutOfMemoryError`
-on the way there.
+`maxHeap` is now about 1113 MiB: 75% of 1536 is 1152, less the survivor
+space as in Module 1, with no `OutOfMemoryError` on the way there.
 On the dashboard, *JVM max heap* steps up here, and *Container restarts*
 ticks up with it; compare with Exercise 3, where the restart came from an
 OOM instead of a policy.

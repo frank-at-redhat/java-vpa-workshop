@@ -105,7 +105,19 @@ The cluster is connected, so no mirroring is required.
 
 . Install the Vertical Pod Autoscaler Operator from OperatorHub into
 `openshift-vertical-pod-autoscaler`.
-. Install the Red Hat build of OpenTelemetry Operator from OperatorHub.
+. Install the Red Hat build of OpenTelemetry Operator from OperatorHub, with
+*Enable Operator recommended cluster monitoring on this Namespace* checked.
+If you install it from a `Subscription` instead, set the label that
+checkbox would have set:
++
+[source,bash,role=execute]
+----
+oc label namespace openshift-opentelemetry-operator \
+  openshift.io/cluster-monitoring=true
+----
++
+Without it, the Operator's own `ServiceMonitor` lands in user workload
+monitoring, which rejects its `bearerTokenFile` and raises a console alert.
 . Enable user workload monitoring:
 +
 [source,bash,role=execute]

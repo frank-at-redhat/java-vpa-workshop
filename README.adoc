@@ -26,7 +26,7 @@ This README is for the people who maintain the workshops.
 |Files to ship with every release: each one is attached to the release, listed on the Downloads page and put in the offline bundle.
 |===
 
-The site look, the PDF look, the build and release workflows and the chart come from https://github.com/redhat-na-ssa/workshop-common[workshop-common], so change those there.
+The site look, the PDF look, the build and release workflows and the chart come from https://github.com/frank-at-redhat/workshop-common[workshop-common], so change those there.
 Its README explains the layout in full.
 
 == Working on the Workshops
@@ -34,7 +34,7 @@ Its README explains the layout in full.
 Every pull request runs *Check content*, which holds the lines it changes to the formatting conventions, checks that the site and each workshop on its own build without warnings or broken links, and *Test PDF Build*.
 A merge to `main` publishes the site.
 
-With https://github.com/redhat-na-ssa/workshop-common[workshop-common] checked out next to this repo, preview the whole site from this repo's folder:
+With https://github.com/frank-at-redhat/workshop-common[workshop-common] checked out next to this repo, preview the whole site from this repo's folder:
 
 [source,bash]
 ----

@@ -1,6 +1,6 @@
 name: Check content
 # Fails a pull request on runnable commands in sentences, code lines too long for the PDF,
-# Antora warnings or broken links; see "Pull request checks" in redhat-na-ssa/workshop-common.
+# Antora warnings or broken links; see "Pull request checks" in frank-at-redhat/workshop-common.
 on:
   pull_request:
   workflow_dispatch:
@@ -10,4 +10,4 @@ permissions:
 
 jobs:
   check:
-    uses: redhat-na-ssa/workshop-common/.github/workflows/content-check.yml@main
+    uses: frank-at-redhat/workshop-common/.github/workflows/content-check.yml@node24

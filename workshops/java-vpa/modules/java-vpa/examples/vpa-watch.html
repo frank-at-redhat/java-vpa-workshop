@@ -404,12 +404,26 @@ function deriveGc(samples) {
 }
 const fmtPct = x => x == null ? '–' : (x * 100).toFixed(x < 0.01 ? 2 : 1) + '%';
 
+// Which collector the JVM chose, from the GC names the agent reports.
+function collectorOf(o) {
+  const n = Object.keys((o && o.gc) || {}).join(' ');
+  if (/G1/.test(n)) return ['G1', ''];
+  if (/Copy|MarkSweepCompact/.test(n)) return ['Serial', 'chosen by JVM ergonomics because the container had under 2 CPUs or under ~1.75 GiB at startup; single-threaded, every pause stops the app'];
+  if (/PS /.test(n)) return ['Parallel', ''];
+  if (/ZGC/.test(n)) return ['ZGC', ''];
+  if (/Shenandoah/.test(n)) return ['Shenandoah', ''];
+  return [n || '–', ''];
+}
+const heapMax = s => (s.jvm && s.jvm.maxHeap) || (s.otel && s.otel.heapLimit) || 0;
+
 function jvmCard(st) {
   const s = st.samples[st.samples.length - 1]; const o = s && s.otel;
   if (!o) return `<div class="tile jvm"><h2>JVM · OpenTelemetry</h2><dl><dt>Agent metrics</dt><dd><small>none for this pod yet: the agent exports every 15 s to the Collector, and the watcher reads the Collector's Prometheus endpoint</small></dd></dl></div>`;
   const row = (k, v, c = '') => `<dt>${k}</dt><dd class="${c}">${v}</dd>`;
   const bar = (x, warn) => `<span class="bar"><i style="width:${Math.min(100, Math.round(x * 100))}%"></i></span>`;
-  const heapPct = o.heapLimit ? o.heapUsed / o.heapLimit : null;
+  const hm = heapMax(s);
+  const heapPct = hm ? o.heapUsed / hm : null;
+  const [coll, collWhy] = collectorOf(o);
   const gcs = Object.entries(o.gc || {}).sort();
   // per-collector rate over the same window as gcRatio
   let j = st.samples.length - 2; while (j >= 0 && s.t - st.samples[j].t < 55) j--;
@@ -419,11 +433,12 @@ function jvmCard(st) {
     return `<div><b>${n.replace(' Generation', '')}</b><br>${Math.round(g.count || 0)} pauses, avg ${(avg * 1000).toFixed(1)} ms${dc != null ? `<br>${Math.round(dc)} in the last ${Math.round(s.t - st.samples[j].t)} s` : ''}</div>`; }).join('');
   return `<div class="tile jvm"><h2>JVM · OpenTelemetry · ${s.pod ? s.pod.replace(/^.*-(\w+)$/, '…$1') : ''}</h2><dl>` +
     row('Time in GC', `${fmtPct(s.gcRatio)} <small>${s.gcPerMin != null ? `${s.gcPerMin.toFixed(1)} pauses/min` : 'needs a minute of samples'}</small>`, (s.gcRatio > 0.05 ? 'warn' : s.gcRatio != null && s.gcRatio < 0.02 ? 'good' : '') + ' big') +
-    row('Heap used', `${fmtMem(o.heapUsed)} of ${fmtMem(o.heapLimit)}${heapPct != null ? ` <small>${fmtPct(heapPct)}</small>${bar(heapPct)}` : ''}`, heapPct > 0.9 ? 'warn' : '') +
+    row('Heap used', `${fmtMem(o.heapUsed)} of ${fmtMem(hm)}${heapPct != null ? ` <small>${fmtPct(heapPct)}</small>${bar(heapPct)}` : ''}`, heapPct > 0.9 ? 'warn' : '') +
+    row('Collector', `${coll}${collWhy ? ` <small>${collWhy}</small>` : ''}`, coll === 'Serial' ? 'warn' : '') +
     row('Heap committed', `${fmtMem(o.heapCommitted)} <small>reserved from the container so far</small>`) +
     row('Non-heap used', `${fmtMem(o.nonHeapUsed)} <small>metaspace, code cache, class space: outside MaxRAMPercentage</small>`) +
-    row('Threads · classes', `${o.threads ?? '–'} · ${o.classes != null ? Math.round(o.classes) : '–'} <small>thread stacks live outside the heap</small>`) +
-    row('CPU (JVM view)', `${fmtPct(o.cpu)} <small>of availableProcessors()</small>`) +
+    row('Threads · classes', `${o.threads != null ? Math.round(o.threads) : '–'} · ${o.classes != null ? Math.round(o.classes) : '–'} <small>thread stacks live outside the heap</small>`) +
+    row('Process CPU', `${fmtPct(o.cpu)} <small>recent utilization, as the agent reports it</small>`) +
     `</dl><div class="gcrow">${per}</div></div>`;
 }
 
@@ -462,7 +477,7 @@ function narrate(samples, events) {
       const procNote = a.jvm && b.jvm && a.jvm.procs !== b.jvm.procs ? ` availableProcessors() went ${a.jvm.procs} → ${b.jvm.procs}.` : '';
       story.push({t: b.t, head: 'Pod resized in place', body:
         `CPU limit ${fmtCpu(a.cpu.lim)} → ${fmtCpu(b.cpu.lim)}, memory limit ${fmtMem(a.mem.lim)} → ${fmtMem(b.mem.lim)}; requests ${fmtCpu(a.cpu.req)} → ${fmtCpu(b.cpu.req)} CPU, ${fmtMem(a.mem.req)} → ${fmtMem(b.mem.req)} memory. Same pod, same IP, no restart.${procNote}${heapNote}`,
-        why: 'The kubelet rewrote the container\'s cgroup limits in place. The kernel honors the new memory ceiling immediately, so the extra room is real, but it is only usable by things that size themselves at runtime: metaspace, threads, direct buffers. The heap was sized once from MaxRAMPercentage at startup' + (heapA && heapB && heapA === heapB ? ` and is still ${fmtMem(heapB)}: the container got ${fmtMem(b.mem.lim - heapB)} of room the JVM cannot spend on heap.` : '.')});
+        why: (collectorOf(b.otel)[0] === 'Serial' ? 'Note the collector: the JVM picked Serial GC at startup because the container was small then, and a resize does not change that either. ' : '') + 'The kubelet rewrote the container\'s cgroup limits in place. The kernel honors the new memory ceiling immediately, so the extra room is real, but it is only usable by things that size themselves at runtime: metaspace, threads, direct buffers. The heap was sized once from MaxRAMPercentage at startup' + (heapA && heapB && heapA === heapB ? ` and is still ${fmtMem(heapB)}: the container got ${fmtMem(b.mem.lim - heapB)} of room the JVM cannot spend on heap.` : '.')});
     }
     if (restarted) {
       const oom = near(b.t, 'BackOff', 90, b.pod) || near(b.t, 'OOMKilling', 90, b.pod);
@@ -502,7 +517,7 @@ function narrate(samples, events) {
     // GC pressure: sustained share of wall clock in pauses
     if (b.gcRatio != null && b.gcRatio > 0.05 && !(a.gcRatio > 0.05))
       story.push({t: b.t, warn: true, pod: b.pod, head: `GC pressure: ${fmtPct(b.gcRatio)} of time in pauses`, body:
-        `${b.gcPerMin != null ? `${b.gcPerMin.toFixed(0)} pauses per minute. ` : ''}Heap used ${fmtMem(b.otel.heapUsed)} of ${fmtMem(b.otel.heapLimit)}.`,
+        `${b.gcPerMin != null ? `${b.gcPerMin.toFixed(0)} pauses per minute. ` : ''}Heap used ${fmtMem(b.otel.heapUsed)} of ${fmtMem(heapMax(b))}${collectorOf(b.otel)[0] === 'Serial' ? ', on the single-threaded Serial collector' : ''}.`,
         why: 'Above a few percent, the collector is running constantly to free a little space at a time: live data is close to the max heap, or the CPU limit is starving the GC threads. Either way latency rises before anything crashes, and a dashboard that only shows container memory sees nothing wrong. The fix is a bigger heap (via the limit and MaxRAMPercentage), fewer live objects, or more CPU; not a VPA memory bump that the running JVM can\'t use.'});
     if (capped(b) && !capped(a))
       story.push({t: b.t, head: 'CPU recommendation hit maxAllowed', body:
@@ -519,8 +534,8 @@ function pending(samples) {
   const s = samples[samples.length - 1]; if (!s) return ['', false];
   const rp = s.resizePolicy || {};
   const o = s.otel;
-  if (o && o.heapLimit && o.heapUsed / o.heapLimit > 0.9)
-    return [`<b>Heap is ${fmtPct(o.heapUsed / o.heapLimit)} full</b> (${fmtMem(o.heapUsed)} of ${fmtMem(o.heapLimit)}) and GC is at ${fmtPct(s.gcRatio)}: an OutOfMemoryError is likely before the VPA does anything. The container limit is ${fmtMem(s.mem.lim)}; the JVM can\'t use the difference without a restart.`, true];
+  if (o && heapMax(s) && o.heapUsed / heapMax(s) > 0.9)
+    return [`<b>Heap is ${fmtPct(o.heapUsed / heapMax(s))} full</b> (${fmtMem(o.heapUsed)} of ${fmtMem(heapMax(s))}) and GC is at ${fmtPct(s.gcRatio)}: an OutOfMemoryError is likely before the VPA does anything. The container limit is ${fmtMem(s.mem.lim)}; the JVM can\'t use the difference without a restart.`, true];
   if (!s.recProvided) return ['Waiting for the recommender: no recommendation yet. It needs a few minutes of samples.', true];
   if (!s.mode || s.mode === 'Off') return [`Mode <b>Off</b>: the VPA recommends and nothing changes on the pod. Target now ${fmtCpu(s.cpu.target)} CPU, ${fmtMem(s.mem.target)} memory.`, false];
   if (s.mode === 'Initial') return ['Mode <b>Initial</b>: the recommendation is applied only when a new pod is created.', false];

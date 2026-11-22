@@ -85,7 +85,7 @@ def otel_view(podname):
         return None
     if not rows: return None
     v = {"heapUsed": 0, "heapCommitted": 0, "nonHeapUsed": 0, "heapLimit": 0,
-         "pools": {}, "gc": {}, "threads": None, "classes": None, "cpu": None}
+         "pools": {}, "gc": {}, "threads": 0, "classes": None, "cpu": None}
     for name, l, val in rows:
         t = l.get("jvm_memory_type"); pool = l.get("jvm_memory_pool_name")
         if name == "jvm_memory_used_bytes":
@@ -98,7 +98,7 @@ def otel_view(podname):
             v["gc"].setdefault(l.get("jvm_gc_name", "?"), {})["count"] = val
         elif name == "jvm_gc_duration_seconds_sum":
             v["gc"].setdefault(l.get("jvm_gc_name", "?"), {})["sum"] = val
-        elif name == "jvm_thread_count": v["threads"] = val
+        elif name == "jvm_thread_count": v["threads"] += val  # split by daemon/state labels
         elif name == "jvm_class_count": v["classes"] = val
         elif name == "jvm_cpu_recent_utilization_ratio": v["cpu"] = val
     return v

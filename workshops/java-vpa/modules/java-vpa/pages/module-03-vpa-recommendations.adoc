@@ -100,6 +100,47 @@ include::example$vpa-off.yaml[]
 oc apply -f vpa-off.yaml
 ----
 
+. While the recommender warms up, deploy *VPA Watch*, a small page that
+runs in your project and shows what the VPA is doing and when: the
+recommendation and its bounds, the pod's actual requests and limits, the
+JVM's own view, and every VPA and kubelet event, on one live timeline.
+It reads through its own ServiceAccount; the `Role` grants only `get` and
+`list` on pods, events and VPAs in this project:
++
+[source,yaml]
+----
+include::example$vpa-watch.yaml[]
+----
++
+[source,bash,role=execute]
+----
+oc create configmap vpa-watch-src \
+  --from-file=vpa-watch.py \
+  --from-file=vpa-watch.html
+----
++
+[source,bash,role=execute]
+----
+oc apply -f vpa-watch.yaml
+----
++
+[source,bash,role=execute]
+----
+oc get route vpa-watch -o jsonpath='https://{.spec.host}{"\n"}'
+----
++
+Open that URL in a browser tab and keep it open for the rest of the
+workshop.
+The two charts fill in as samples arrive, every 10 seconds.
++
+[NOTE]
+====
+The page is a few hundred lines of Python and HTML with no dependencies,
+in this workshop's `downloads/` folder.
+It polls the same API the `oc get vpa` commands below use; it's a
+convenience for watching, not a different source of truth.
+====
+
 . Give the recommender a minute, then read the status:
 +
 [source,bash,role=execute]
@@ -160,7 +201,10 @@ oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=250'
 oc exec deploy/load -c load -- curl -s 'localhost:8080/cpu?t=4&s=300'
 ----
 
-. Poll the recommendation every 30 seconds for a few minutes:
+. Watch the *VPA target* line on both VPA Watch charts climb, and the
+*VPA lower–upper* band widen with it.
+The *container request* and *limit* lines don't move: this is `Off` mode.
+The same numbers, from the command line, every 30 seconds:
 +
 [source,bash,role=execute]
 ----

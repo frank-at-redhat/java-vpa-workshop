@@ -357,6 +357,10 @@ oc exec $POD -c load -- curl -s localhost:8080/
 +
 `maxHeap` is now about 1113 MiB: 75% of 1536 is 1152, less the survivor
 space as in Module 1, with no `OutOfMemoryError` on the way there.
+On VPA Watch the *container limit* and *JVM max heap* lines step up
+together this time, at a gray marker (`Killing`, then `Started`, from the
+kubelet) rather than a red one.
+Compare that to the previous step's shape: same outcome, no crash.
 On the dashboard, *JVM max heap* steps up here, and *Container restarts*
 ticks up with it; compare with Exercise 3, where the restart came from an
 OOM instead of a policy.

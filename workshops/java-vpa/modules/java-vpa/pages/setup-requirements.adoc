@@ -72,7 +72,8 @@ Each attendee needs a cluster user with these roles:
 |Their own project
 |Every module. It covers `VerticalPodAutoscaler`, `OpenTelemetryCollector`
 and `Instrumentation` objects and the pod `resize` subresource once the
-Operators are installed.
+Operators are installed, and the `ServiceAccount`, `Role`, `RoleBinding`
+and `Route` that the VPA Watch page in Module 3 creates.
 
 |`monitoring-edit`
 |Their own project

@@ -92,6 +92,17 @@ Module 4, Exercise 4 drives the resize by hand with the `resize` subresource
 for that reason; use the same trick anywhere the updater is slower than the
 room.
 
+=== Put VPA Watch on the projector
+
+Module 3 has attendees deploy a small live page in their own project (VPA
+Watch, in `downloads/`).
+Deploy one in your own project before the session and leave it on the
+shared screen from Module 3 on: every resize, restart and recommendation
+change in Module 4 shows up on it within ten seconds, with an event marker,
+so you can narrate from the chart instead of from `watch` output.
+It also lets you see at a glance whether the room is ahead of or behind
+you.
+
 === Module 4 is the point of the workshop
 
 If time is short, cut Exercise 2 of Module 1 and the `oc` metric queries in

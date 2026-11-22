@@ -1,0 +1,112 @@
+# VPA Watch: a small in-project page that shows what the VPA is doing and
+# when. Reads the VPA, pods and events through its own ServiceAccount, polls
+# the sample app for the JVM's view, and serves one live page.
+#
+#   oc create cm vpa-watch-src --from-file=vpa-watch.py --from-file=vpa-watch.html
+#   oc apply -f vpa-watch.yaml
+#   oc get route vpa-watch -o jsonpath='https://{.spec.host}{"\n"}'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vpa-watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vpa-watch
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vpa-watch
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vpa-watch
+subjects:
+  - kind: ServiceAccount
+    name: vpa-watch
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vpa-watch
+  labels:
+    app: vpa-watch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vpa-watch
+  template:
+    metadata:
+      labels:
+        app: vpa-watch
+    spec:
+      serviceAccountName: vpa-watch
+      containers:
+        - name: vpa-watch
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          command: ["python3", "/app/vpa-watch.py"]
+          env:
+            - name: VPA_NAME
+              value: load
+            - name: APP_LABEL
+              value: app=load
+            - name: CONTAINER
+              value: load
+            - name: JVM_URL
+              value: http://load:8080/
+            - name: POLL_SECONDS
+              value: "10"
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: src
+              mountPath: /app
+      volumes:
+        - name: src
+          configMap:
+            name: vpa-watch-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpa-watch
+spec:
+  selector:
+    app: vpa-watch
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vpa-watch
+spec:
+  to:
+    kind: Service
+    name: vpa-watch
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

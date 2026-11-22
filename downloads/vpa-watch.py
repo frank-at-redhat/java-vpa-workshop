@@ -121,11 +121,12 @@ def poll_once(get):
             "updateMode": vpa.get("spec", {}).get("updatePolicy", {}).get("updateMode"),
             "conditions": conds, "poll": POLL}
 
-    names = {VPA} | {p["metadata"]["name"] for p in pods.get("items", [])}
+    target = spec.get("targetRef", {}).get("name")
+    names = {VPA, target} | {p["metadata"]["name"] for p in pods.get("items", [])}
     new_events = {}
     for e in evs.get("items", []):
         obj = e.get("involvedObject", {})
-        if obj.get("name") not in names and obj.get("kind") not in ("Deployment",):
+        if obj.get("name") not in names:
             continue
         key = e["metadata"]["uid"] + ":" + str(e.get("count", 1))
         ts = e.get("lastTimestamp") or e.get("eventTime") or e["metadata"]["creationTimestamp"]

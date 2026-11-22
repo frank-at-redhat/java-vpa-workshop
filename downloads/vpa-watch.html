@@ -188,7 +188,8 @@ const TAGS = {
   Started: 'started', Created: 'created', Scheduled: 'scheduled', Pulled: 'pulled', Note: 'note',
   RecommendationProvided: 'recommendation', FailedScheduling: 'unschedulable',
 };
-const QUIET = new Set(['Started', 'Created', 'Scheduled', 'Pulled', 'Pulling', 'ResizeStarted']);  // no flag on the chart
+const QUIET = new Set(['Started', 'Created', 'Scheduled', 'Pulled', 'Pulling', 'ResizeStarted',
+  'ScalingReplicaSet', 'SuccessfulCreate', 'SuccessfulDelete', 'AddedInterface']);  // table only, no flag
 const tagOf = e => TAGS[e.reason] || (e.reason || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
 const cls = e => e.kind === 'Note' ? 'note' : e.type === 'Warning' ? 'warn' : '';
 

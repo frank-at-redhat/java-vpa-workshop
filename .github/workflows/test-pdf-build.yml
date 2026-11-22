@@ -15,4 +15,4 @@ permissions:
 
 jobs:
   test-build:
-    uses: frank-at-redhat/workshop-common/.github/workflows/pdf-test.yml@node24
+    uses: frank-at-redhat/workshop-common/.github/workflows/pdf-test.yml@main

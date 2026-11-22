@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   release:
-    uses: frank-at-redhat/workshop-common/.github/workflows/release.yml@node24
+    uses: frank-at-redhat/workshop-common/.github/workflows/release.yml@main
     with:
       tag-name: ${{ github.event_name == 'push' && github.ref_name || inputs.tag_name }}
       title: "Java Right-Sizing Workshop"

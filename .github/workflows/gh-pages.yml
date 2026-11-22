@@ -24,4 +24,4 @@ concurrency:
 jobs:
   pages:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    uses: frank-at-redhat/workshop-common/.github/workflows/pages.yml@node24
+    uses: frank-at-redhat/workshop-common/.github/workflows/pages.yml@main

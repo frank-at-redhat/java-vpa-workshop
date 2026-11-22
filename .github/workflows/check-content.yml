@@ -10,4 +10,4 @@ permissions:
 
 jobs:
   check:
-    uses: frank-at-redhat/workshop-common/.github/workflows/content-check.yml@node24
+    uses: frank-at-redhat/workshop-common/.github/workflows/content-check.yml@main

@@ -155,6 +155,10 @@ Within a couple of minutes both limits change in one step.
 The pod name and `RESTARTS` don't.
 Your memory figure differs a little from the sample; it follows your
 recommendation.
+On VPA Watch the headline changes to *Pod resized in place* and spells out
+the before and after, including that the JVM's max heap did not move.
+The *container limit* and *request* lines step up to meet the target and a
+numbered flag tagged *in-place resize* appears above both charts.
 +
 [source,text]
 ----
@@ -283,6 +287,10 @@ availableProcessors=3 maxHeap=759MiB totalHeap=27MiB used=22MiB
 +
 Same pod, one restart, and *now* `maxHeap` is 759 MiB: 75% of the limit it
 re-read on startup.
+On VPA Watch the headline turns red, *Container crashed and restarted*,
+with the heap before and after; a red flag tagged *OOM restart* marks the
+moment and *JVM max heap* finally steps up to meet the limit, several
+minutes after the limit itself moved.
 The resize "worked", one crash later.
 That crash is what `RestartContainer` on memory turns into a controlled
 restart.
@@ -357,9 +365,9 @@ oc exec $POD -c load -- curl -s localhost:8080/
 +
 `maxHeap` is now about 1113 MiB: 75% of 1536 is 1152, less the survivor
 space as in Module 1, with no `OutOfMemoryError` on the way there.
-On VPA Watch the *container limit* and *JVM max heap* lines step up
-together this time, at a gray marker (`Killing`, then `Started`, from the
-kubelet) rather than a red one.
+On VPA Watch the headline reads *Container restarted by resize policy*,
+and the *container limit* and *JVM max heap* lines step up together this
+time, at a gray flag tagged *policy restart* rather than a red one.
 Compare that to the previous step's shape: same outcome, no crash.
 On the dashboard, *JVM max heap* steps up here, and *Container restarts*
 ticks up with it; compare with Exercise 3, where the restart came from an

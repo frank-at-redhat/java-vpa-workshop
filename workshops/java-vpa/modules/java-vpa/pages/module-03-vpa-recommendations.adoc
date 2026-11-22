@@ -132,6 +132,10 @@ oc get route vpa-watch -o jsonpath='https://{.spec.host}{"\n"}'
 Open that URL in a browser tab and keep it open for the rest of the
 workshop.
 The two charts fill in as samples arrive, every 10 seconds.
+The page narrates itself: the headline at the top describes the last thing
+that changed (a resize, a restart, a new recommendation) and the line under
+it says what the updater will or won't do next and why.
+Numbered flags above each chart match the numbers in the event table.
 +
 [NOTE]
 ====

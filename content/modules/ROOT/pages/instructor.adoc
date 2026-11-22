@@ -103,6 +103,22 @@ so you can narrate from the chart instead of from `watch` output.
 It also lets you see at a glance whether the room is ahead of or behind
 you.
 
+Two things only the facilitator's copy needs:
+
+* Open it with `?kiosk` on the end of the URL. Bigger type, a 30-minute
+window, the event table hidden, and the narration headline at the top is
+readable from the back of the room. `?kiosk&window=60` widens the window.
+* Chapter the timeline as you go. The page shows any note you put on the
+VPA as a marker and a headline, in your words, stamped when it sees it:
++
+[source,bash,role=execute]
+----
+oc annotate vpa load --overwrite \
+  vpa-watch/note="Exercise 3: filling the heap past the old max"
+----
++
+A new value is a new note; the previous ones stay on the chart.
+
 === Module 4 is the point of the workshop
 
 If time is short, cut Exercise 2 of Module 1 and the `oc` metric queries in

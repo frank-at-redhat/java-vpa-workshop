@@ -21,7 +21,7 @@ KEEP = int(os.environ.get("KEEP_SAMPLES", "1080"))  # 3h at 10s
 PORT = int(os.environ.get("PORT", "8080"))
 DEMO = "--demo" in sys.argv
 
-STATE = {"samples": [], "events": {}, "meta": {}, "error": None}
+STATE = {"samples": [], "events": {}, "meta": {}, "error": None, "note": None}
 LOCK = threading.Lock()
 
 # ---------------------------------------------------------------- k8s access
@@ -78,17 +78,31 @@ def poll_once(get):
     live = [p for p in pods.get("items", []) if not p["metadata"].get("deletionTimestamp")]
     live.sort(key=lambda p: p["metadata"]["creationTimestamp"])
     pod = live[-1] if live else None
-    res, restarts, resize, podname = {}, 0, "", None
+    res, restarts, resize, podname, rpol = {}, 0, "", None, {}
     if pod:
         podname = pod["metadata"]["name"]
         for c in pod["spec"]["containers"]:
-            if c["name"] == CONTAINER: res = c.get("resources", {})
+            if c["name"] == CONTAINER:
+                res = c.get("resources", {})
+                rpol = {r["resourceName"]: r.get("restartPolicy", "NotRequired")
+                        for r in c.get("resizePolicy", [])}
         for cs in pod.get("status", {}).get("containerStatuses", []):
             if cs["name"] == CONTAINER: restarts = cs.get("restartCount", 0)
         resize = pod.get("status", {}).get("resize", "")
 
+    spec = vpa.get("spec", {})
+    pol = {}
+    for c in spec.get("resourcePolicy", {}).get("containerPolicies", []):
+        if c.get("containerName") in (CONTAINER, "*"):
+            pol = {"minCpu": qty(c.get("minAllowed", {}).get("cpu")),
+                   "maxCpu": qty(c.get("maxAllowed", {}).get("cpu")),
+                   "minMem": qty(c.get("minAllowed", {}).get("memory")),
+                   "maxMem": qty(c.get("maxAllowed", {}).get("memory"))}
     sample = {
         "t": now, "pod": podname, "restarts": restarts, "resize": resize,
+        "mode": spec.get("updatePolicy", {}).get("updateMode"),
+        "resizePolicy": rpol, "policy": pol,
+        "recProvided": conds.get("RecommendationProvided") == "True",
         "cpu": {"req": qty(res.get("requests", {}).get("cpu")),
                 "lim": qty(res.get("limits", {}).get("cpu")),
                 "target": qty(rec.get("target", {}).get("cpu")),
@@ -120,7 +134,15 @@ def poll_once(get):
                            "type": e.get("type"), "message": (e.get("message") or "")[:300],
                            "source": (e.get("source", {}) or {}).get("component")
                                      or e.get("reportingComponent")}
+    # Instructor notes: `oc annotate vpa load vpa-watch/note="..."`. Each new
+    # value becomes a marker, stamped when the watcher first sees it.
+    note = vpa.get("metadata", {}).get("annotations", {}).get("vpa-watch/note")
     with LOCK:
+        if note and note != STATE["note"]:
+            new_events["note:%d" % int(now)] = {
+                "t": now, "kind": "Note", "name": VPA, "reason": "Note",
+                "type": "Normal", "message": note, "source": "instructor"}
+        STATE["note"] = note
         STATE["samples"].append(sample)
         del STATE["samples"][:-KEEP]
         STATE["events"].update(new_events)
@@ -152,14 +174,18 @@ def demo_step(now=None):
     """Replays the dry run: Off-mode recs climb, then an in-place resize,
     then an OOM restart, then a RestartContainer memory resize."""
     now = now or time.time(); el = now - DEMO_T0
-    Mi = 2**20
+    Mi = 2**20; Gi = 2**30
     cpu_lim, mem_lim, restarts, procs, heap = 0.5, 512*Mi, 0, 1, 371*Mi
     tgt_cpu = min(2.0, 0.1 + el / 120); tgt_mem = min(548*Mi, 256*Mi + el * 300e3)
     if el > 480:  cpu_lim, mem_lim, procs = 2.935, 1047*Mi, 3
     if el > 720:  restarts, heap = 1, 759*Mi
     if el > 1020: mem_lim, restarts, heap = 1536*Mi, 2, 1152*Mi
     s = {"t": now, "pod": "load-66d8dd45cb-snk2b", "restarts": restarts,
-         "resize": "InProgress" if 480 < el < 490 else "",
+         "resize": "", "mode": "Off" if el < 300 else "InPlaceOrRecreate",
+         "recProvided": el > 5,
+         "resizePolicy": {"cpu": "NotRequired",
+                          "memory": "NotRequired" if el < 900 else "RestartContainer"},
+         "policy": {"minCpu": 0.1, "maxCpu": 2.0, "minMem": 256*Mi, "maxMem": 2*Gi},
          "cpu": {"req": cpu_lim/5 if el <= 480 else 2.0, "lim": cpu_lim, "target": tgt_cpu,
                  "lower": tgt_cpu*0.6, "upper": min(2.0, tgt_cpu*1.6), "uncapped": tgt_cpu*1.5},
          "mem": {"req": mem_lim/2 if el <= 480 else 548*Mi, "lim": mem_lim, "target": tgt_mem,
@@ -174,6 +200,12 @@ def demo_step(now=None):
        "First recommendation written", "vpa-recommender")
     ev("b", 480, "Pod", "load-66d8dd45cb-snk2b", "InPlaceResizedByVPA", "Normal",
        "Resized container load: cpu 500m->2935m, memory 512Mi->1047Mi", "vpa-updater")
+    ev("b2", 481, "Pod", "load-66d8dd45cb-snk2b", "ResizeCompleted", "Normal",
+       "Pod resize completed: {\"load\":{\"limits\":{\"cpu\":\"2935m\",\"memory\":\"1047Mi\"},\"requests\":{\"cpu\":\"587m\",\"memory\":\"523Mi\"}}}", "kubelet")
+    ev("n1", 300, "Note", "load", "Note", "Normal",
+       "Module 4, Ex 1: switched the VPA to InPlaceOrRecreate", "instructor")
+    ev("n2", 700, "Note", "load", "Note", "Normal",
+       "Ex 3: retained 300 MiB, now asking for 100 more", "instructor")
     ev("c", 720, "Pod", "load-66d8dd45cb-snk2b", "BackOff", "Warning",
        "Container load exited 137 (OutOfMemoryError, ExitOnOutOfMemoryError)", "kubelet")
     ev("d", 722, "Pod", "load-66d8dd45cb-snk2b", "Started", "Normal",

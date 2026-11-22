@@ -127,6 +127,19 @@ body.kiosk .legend, body.kiosk .sub { font-size: 14px; }
 body.kiosk .events { display: none; }
 body.kiosk .sofar ol { font-size: 15px; }
 body.kiosk .tip { display: none !important; }
+/* replay transport */
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 16px 0;
+  font-size: 13px; color: var(--ink-2); }
+.transport button, .transport select { font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.transport button.on { border-color: var(--s-target); color: var(--s-target); }
+.transport input[type=range] { flex: 1 1 220px; min-width: 160px; accent-color: var(--s-target); }
+.transport .pos { font-variant-numeric: tabular-nums; min-width: 160px; }
+.transport .mode { font-weight: 600; color: var(--ink); }
+.transport .mode.replay { color: var(--s-jvm); }
+.transport a { color: var(--ink-2); }
+body.kiosk .transport { font-size: 15px; }
+.cursor { stroke: var(--s-jvm); stroke-width: 1.5; }
 @keyframes flash { from { background: var(--band); } to { background: transparent; } }
 @media (max-width: 600px) { main { padding: 8px 12px 20px; } header { padding: 12px 12px 4px; } }
 </style>
@@ -136,6 +149,17 @@ body.kiosk .tip { display: none !important; }
   <h1>VPA Watch</h1>
   <span class="meta" id="meta">connecting…</span>
 </header>
+<div class="transport" id="transport">
+  <span class="mode" id="mode">LIVE</span>
+  <button id="play" title="play / pause">▶</button>
+  <select id="speed"><option value="10">10×</option><option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option></select>
+  <input type="range" id="scrub" min="0" max="1000" value="1000">
+  <span class="pos" id="pos"></span>
+  <button id="live" class="on">Live</button>
+  <a href="#" id="save">save run</a>
+  <label><input type="file" id="open" accept=".json" style="display:none">open run</label>
+  <span id="runs"></span>
+</div>
 <div id="err"></div>
 <main>
   <div class="story">
@@ -208,13 +232,13 @@ const SERIES = {
   ],
 };
 
-function draw(id, res, samples, events, fmt) {
+function draw(id, res, samples, events, fmt, range, cursor) {
   const svg = $('#' + id);
   const W = svg.clientWidth || 600, H = 290, L = 54, R = 118, T = 52, B = 26;  // T leaves a strip for event flags
   const pw = W - L - R, ph = H - T - B;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   if (samples.length < 2) { svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle">waiting for samples…</text>`; return; }
-  const t0 = samples[0].t, t1 = samples[samples.length - 1].t;
+  const t0 = range ? range[0] : samples[0].t, t1 = range ? range[1] : samples[samples.length - 1].t;
   const band = samples.map(s => [s[res].lower, s[res].upper]);
   let vmax = 0;
   for (const s of samples) {
@@ -263,12 +287,14 @@ function draw(id, res, samples, events, fmt) {
   // direct labels at line ends, de-collided
   ends.sort((a, b) => a.y - b.y);
   for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
-  for (const e of ends) out += `<circle cx="${L + pw}" cy="${e.y}" r="3" fill="${e.color}"/><text class="lbl" x="${L + pw + 7}" y="${e.y + 4}">${e.text}</text>`;
+  const xe = X(samples[samples.length - 1].t);
+  for (const e of ends) out += `<circle cx="${xe}" cy="${e.y}" r="3" fill="${e.color}"/><text class="lbl" x="${xe + 7}" y="${e.y + 4}">${e.text}</text>`;
   // x axis
   out += `<g class="axis"><line x1="${L}" x2="${L + pw}" y1="${T + ph}" y2="${T + ph}"/></g>`;
   const nT = Math.max(2, Math.floor(pw / (KIOSK ? 160 : 110)));
   for (let i = 0; i <= nT; i++) { const t = t0 + (t1 - t0) * i / nT;
     out += `<text x="${X(t)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === nT ? 'end' : 'middle'}">${fmtT(t)}</text>`; }
+  if (cursor != null) out += `<line class="cursor" x1="${X(cursor)}" x2="${X(cursor)}" y1="${T - 6}" y2="${T + ph}"/>`;
   out += `<line id="${id}-xh" x1="0" x2="0" y1="${T}" y2="${T + ph}" stroke="var(--ink-2)" stroke-width="1" style="display:none"/>`;
   out += `<rect x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent" id="${id}-hit"/>`;
   svg.innerHTML = out;
@@ -441,18 +467,66 @@ function renderStory(story) {
   }
   const last = story[story.length - 1];
   nowEl.className = 'now ' + (last.warn ? 'warn' : last.note ? 'note' : '');
-  nowEl.innerHTML = `<div class="when">${fmtT(last.t)} · ${fmtAge(Date.now() / 1000 - last.t)} ago</div><div class="head">${last.head}</div><div class="body">${last.body}</div>` +
+  nowEl.innerHTML = `<div class="when">${fmtT(last.t)} · ${fmtAge(Math.max(0, NOW() - last.t))} ago</div><div class="head">${last.head}</div><div class="body">${last.body}</div>` +
     (last.why ? `<div class="why">${last.why}</div>` : '');
   const prev = story.slice(0, -1).reverse().slice(0, KIOSK ? 5 : 12);
   $('#sofar').style.display = prev.length ? '' : 'none';
   $('#sofarlist').innerHTML = prev.map(x => `<li class="${x.warn ? 'warn' : ''}"><b>${fmtT(x.t)}</b> — <span class="head">${x.head}</span><div class="body">${x.body}</div>${x.why ? `<div class="why">${x.why}</div>` : ''}</li>`).join('');
 }
 
-async function tick() {
+// ---------------------------------------------------------------- replay
+// FULL is the last fetched state. In live mode the view is FULL (minus the
+// window); in replay the view is FULL cut at CUTOFF, and the axis stays on
+// the full range with a cursor, so the room can see what is coming.
+let FULL = null, CUTOFF = null, PLAYING = false, LAST_TICK = 0, SRC = Q.get('src');
+const REPLAY_AUTO = Q.has('replay');
+const NOW = () => CUTOFF != null ? CUTOFF : Date.now() / 1000;
+const span = () => FULL && FULL.samples.length ? [FULL.samples[0].t, FULL.samples[FULL.samples.length - 1].t] : null;
+
+function setMode() {
+  const live = CUTOFF == null;
+  $('#mode').textContent = live ? (SRC ? 'SAVED RUN' : 'LIVE') : 'REPLAY';
+  $('#mode').className = 'mode' + (live ? '' : ' replay');
+  $('#live').className = live ? 'on' : '';
+  $('#play').textContent = PLAYING ? '⏸' : '▶';
+  const r = span();
+  if (r) { const t = CUTOFF == null ? r[1] : CUTOFF;
+    $('#scrub').value = Math.round((t - r[0]) / Math.max(1, r[1] - r[0]) * 1000);
+    $('#pos').textContent = `${fmtT(t)} · ${fmtT(r[0])} – ${fmtT(r[1])}`; }
+}
+function stepPlay() {
+  if (!PLAYING || !FULL) return;
+  const r = span(); if (!r) return;
+  const now = performance.now(), dt = (now - LAST_TICK) / 1000 * Number($('#speed').value); LAST_TICK = now;
+  CUTOFF = (CUTOFF == null ? r[0] : CUTOFF) + dt;
+  if (CUTOFF >= r[1]) { if (REPLAY_AUTO) CUTOFF = r[0]; else { CUTOFF = null; PLAYING = false; } }
+  render();
+}
+setInterval(stepPlay, 500);
+$('#play').onclick = () => { const r = span(); if (!r) return; PLAYING = !PLAYING; LAST_TICK = performance.now();
+  if (PLAYING && (CUTOFF == null || CUTOFF >= r[1])) CUTOFF = r[0]; render(); };
+$('#live').onclick = () => { PLAYING = false; CUTOFF = null; render(); };
+$('#scrub').oninput = e => { const r = span(); if (!r) return; PLAYING = false;
+  const v = Number(e.target.value); CUTOFF = v >= 1000 ? null : r[0] + (r[1] - r[0]) * v / 1000; render(); };
+$('#save').onclick = e => { e.preventDefault(); if (!FULL) return;
+  const name = `vpa-watch-${(FULL.meta || {}).namespace || 'run'}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(FULL)], {type: 'application/json'})); a.download = name; a.click(); };
+$('#open').onchange = async e => { const f = e.target.files[0]; if (!f) return;
+  FULL = JSON.parse(await f.text()); SRC = f.name; CUTOFF = span()[0]; PLAYING = true; LAST_TICK = performance.now(); render(); };
+document.addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return;
+  if (e.key === ' ') { e.preventDefault(); $('#play').click(); } if (e.key === 'l') $('#live').click(); });
+fetch('/api/runs').then(r => r.json()).then(list => { if (list.length)
+  $('#runs').innerHTML = 'saved: ' + list.map(n => `<a href="?src=/runs/${n}${KIOSK ? '&kiosk' : ''}&replay">${n.replace(/\.json$/, '')}</a>`).join(', '); }).catch(() => {});
+
+function render() {
+  if (!FULL) return;
+  const st = {meta: FULL.meta, error: FULL.error, samples: FULL.samples.slice(), events: FULL.events.slice()};
+  let range = null;
+  if (CUTOFF != null) { range = span(); st.samples = st.samples.filter(s => s.t <= CUTOFF); st.events = st.events.filter(e => e.t <= CUTOFF); }
+  else if (WINDOW && st.samples.length) { const cut = st.samples[st.samples.length - 1].t - WINDOW; st.samples = st.samples.filter(s => s.t >= cut); }
+  setMode();
   try {
-    const st = await (await fetch('/api/state', {cache: 'no-store'})).json();
     const m = st.meta || {};
-    if (WINDOW && st.samples.length) { const cut = st.samples[st.samples.length - 1].t - WINDOW; st.samples = st.samples.filter(s => s.t >= cut); }
     const story = narrate(st.samples, st.events);
     // A crash the narration saw but the kubelet logged no Warning for gets its own marker.
     for (const x of story) if (x.warn && !st.events.some(e => e.type === 'Warning' && Math.abs(e.t - x.t) < 60))
@@ -465,12 +539,20 @@ async function tick() {
     $('#meta').innerHTML = `namespace <b>${m.namespace || '–'}</b> · VPA <b>${m.vpa || '–'}</b> · container <b>${m.container || '–'}</b> · ${st.samples.length} samples, every ${m.poll || '?'}s · ${st.samples.length ? 'span ' + fmtAge(st.samples[st.samples.length - 1].t - st.samples[0].t) : ''}`;
     $('#err').textContent = st.error ? 'poll error (showing last good data): ' + st.error : '';
     tiles(st);
-    draw('mem', 'mem', st.samples, st.events, fmtMem);
+    draw('mem', 'mem', st.samples, st.events, fmtMem, range, CUTOFF);
     eventsTable(st.events);
-  } catch (e) { $('#err').textContent = 'cannot reach /api/state: ' + e; }
+  } catch (e) { $('#err').textContent = 'render error: ' + e; }
+}
+async function tick() {
+  if (SRC && FULL) return;  // a saved run doesn't change
+  try {
+    FULL = await (await fetch(SRC || '/api/state', {cache: 'no-store'})).json();
+    if (REPLAY_AUTO && CUTOFF == null && !PLAYING && span()) { CUTOFF = span()[0]; PLAYING = true; LAST_TICK = performance.now(); }
+    render();
+  } catch (e) { $('#err').textContent = `cannot load ${SRC || '/api/state'}: ${e}`; }
 }
 tick(); setInterval(tick, KIOSK ? 3000 : 5000);
-addEventListener('resize', tick);
+addEventListener('resize', render);
 </script>
 </body>
 </html>

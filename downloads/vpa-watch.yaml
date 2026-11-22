@@ -5,6 +5,10 @@
 #   oc create cm vpa-watch-src --from-file=vpa-watch.py --from-file=vpa-watch.html
 #   oc apply -f vpa-watch.yaml
 #   oc get route vpa-watch -o jsonpath='https://{.spec.host}{"\n"}'
+#
+# Optional: saved runs to replay (?src=/runs/<name>.json, or the "saved"
+# links on the page). Any .json files in the vpa-watch-runs ConfigMap:
+#   oc create cm vpa-watch-runs --from-file=sno1.json=vpa-watch-run-sno1.json
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -81,10 +85,16 @@ spec:
           volumeMounts:
             - name: src
               mountPath: /app
+            - name: runs
+              mountPath: /app/runs
       volumes:
         - name: src
           configMap:
             name: vpa-watch-src
+        - name: runs
+          configMap:
+            name: vpa-watch-runs
+            optional: true
 ---
 apiVersion: v1
 kind: Service

@@ -138,6 +138,9 @@ it says what the updater will or won't do next and why.
 Numbered flags above the chart match the numbers in the event table, and
 the *Story so far* list under it keeps every earlier headline with a
 short "why it matters".
+The transport bar under the title replays what the page has seen: press
+*▶* or drag the slider and every part of the page shows the state as of
+that moment; *Live* snaps back.
 +
 [NOTE]
 ====

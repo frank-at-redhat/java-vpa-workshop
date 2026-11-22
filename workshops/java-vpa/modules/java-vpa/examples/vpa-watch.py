@@ -19,6 +19,7 @@ JVM_URL = os.environ.get("JVM_URL", "http://load:8080/")
 POLL = int(os.environ.get("POLL_SECONDS", "10"))
 KEEP = int(os.environ.get("KEEP_SAMPLES", "1080"))  # 3h at 10s
 PORT = int(os.environ.get("PORT", "8080"))
+RUNS_DIR = os.environ.get("RUNS_DIR", "/app/runs")  # saved runs, served at /runs/<name>.json
 DEMO = "--demo" in sys.argv
 
 STATE = {"samples": [], "events": {}, "meta": {}, "error": None, "note": None}
@@ -245,6 +246,16 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, body.encode(), "application/json")
         if self.path.startswith("/healthz"):
             return self.send(200, b"ok", "text/plain")
+        if self.path.startswith("/runs/"):
+            name = os.path.basename(self.path.split("?")[0])
+            fp = os.path.join(RUNS_DIR, name)
+            if name.endswith(".json") and os.path.isfile(fp):
+                return self.send(200, open(fp, "rb").read(), "application/json")
+            return self.send(404, b"no such run", "text/plain")
+        if self.path.startswith("/api/runs"):
+            names = sorted(n for n in os.listdir(RUNS_DIR)) if os.path.isdir(RUNS_DIR) else []
+            return self.send(200, json.dumps([n for n in names if n.endswith(".json")]).encode(),
+                             "application/json")
         return self.send(200, PAGE.encode(), "text/html; charset=utf-8")
 
 PAGE = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),

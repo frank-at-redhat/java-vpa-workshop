@@ -118,6 +118,18 @@ oc annotate vpa load --overwrite \
 ----
 +
 A new value is a new note; the previous ones stay on the chart.
+* Replay. The transport bar scrubs or plays back everything the watcher
+has in memory (three hours by default), with the narration, cards and
+chart all showing the state as of the cursor.
+`?replay` on the URL plays the whole window on a loop, which makes a good
+attract screen before the session; `?kiosk&replay` for the projector.
+*save run* downloads the data as JSON and *open run* plays one back
+offline.
+A saved run from a full dry run on a single-node cluster ships in
+`downloads/` as `vpa-watch-run-sno1.json`; put it in a `vpa-watch-runs`
+ConfigMap (the manifest's header shows how) and it appears under *saved*
+on the page, so you can replay the complete Module 4 story before
+attendees have produced one.
 
 === Module 4 is the point of the workshop
 

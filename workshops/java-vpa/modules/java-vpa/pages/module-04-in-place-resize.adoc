@@ -203,6 +203,9 @@ availableProcessors=3 maxHeap=371MiB totalHeap=31MiB used=14MiB
 +
 `availableProcessors` went from 1 to 3 (`2935m` rounds up).
 `maxHeap` is still 371 MiB on a container whose limit is now 1047 MiB.
+On VPA Watch, the *JVM · OpenTelemetry* card shows the same thing from
+the agent's side: *Heap used* against a max that didn't move, while the
+*Current pod* card shows the limit that did.
 
 . The same thing as graphs. On the dashboard from Module 2, the *CPU*
 panel shows *container limit* and *availableProcessors()* both step up at

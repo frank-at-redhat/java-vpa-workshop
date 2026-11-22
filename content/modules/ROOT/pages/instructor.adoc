@@ -118,6 +118,12 @@ oc annotate vpa load --overwrite \
 ----
 +
 A new value is a new note; the previous ones stay on the chart.
+* The *JVM · OpenTelemetry* card and the *GC time* chart come from the
+Collector's Prometheus endpoint, which the watcher scrapes directly (no
+Thanos, no token). When the heap passes 90% the pending line turns into
+a warning that an `OutOfMemoryError` is coming before the VPA does
+anything, and sustained GC above 5% gets its own red headline. Both are
+worth pointing at in Module 4, Exercise 3, right before the crash.
 * Replay. The transport bar scrubs or plays back everything the watcher
 has in memory (three hours by default), with the narration, cards and
 chart all showing the state as of the cursor.

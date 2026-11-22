@@ -31,8 +31,8 @@ header .meta { color: var(--ink-2); font-size: 13px; }
 header .meta b { color: var(--ink); font-weight: 600; }
 #err { color: var(--warn); font-size: 13px; padding: 0 16px; min-height: 18px; }
 main { display: grid; gap: 12px; padding: 8px 16px 24px; grid-template-columns: 1fr; }
-.tiles { grid-column: 1 / -1; display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.tiles { grid-column: 1 / -1; display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+@media (max-width: 760px) { .tiles { grid-template-columns: 1fr; } }
 .tile, .card { background: var(--surface); border: 1px solid var(--ring);
   border-radius: 8px; padding: 10px 12px; }
 .tile h2 { font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--ink-2); }
@@ -140,6 +140,19 @@ body.kiosk .tip { display: none !important; }
 .transport a { color: var(--ink-2); }
 body.kiosk .transport { font-size: 15px; }
 .cursor { stroke: var(--s-jvm); stroke-width: 1.5; }
+.tile dd .bar { display: inline-block; vertical-align: middle; width: 90px; height: 7px; border-radius: 4px;
+  background: var(--grid); margin-left: 8px; overflow: hidden; }
+.tile dd .bar i { display: block; height: 100%; background: var(--s-jvm); }
+.tile dd.warn .bar i { background: var(--warn); }
+.tile.jvm { grid-column: 1 / -1; }
+.tile.jvm dl { grid-template-columns: max-content 1fr max-content 1fr; }
+@media (max-width: 760px) { .tile.jvm dl { grid-template-columns: max-content 1fr; } }
+.gcrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 4px 12px; margin-top: 4px; }
+.gcrow div { font-size: 13px; color: var(--ink-2); }
+.gcrow div b { color: var(--ink); font-weight: 600; }
+body.kiosk .gcrow div { font-size: 15px; }
+svg.small { height: 150px; }
+body.kiosk svg.small { height: 180px; }
 @keyframes flash { from { background: var(--band); } to { background: transparent; } }
 @media (max-width: 600px) { main { padding: 8px 12px 20px; } header { padding: 12px 12px 4px; } }
 </style>
@@ -177,8 +190,15 @@ body.kiosk .transport { font-size: 15px; }
       <span><i style="background:var(--s-target)"></i>VPA target</span>
       <span><i class="band" style="background:var(--band)"></i>VPA lower–upper</span>
       <span><i style="background:var(--s-jvm)"></i>JVM max heap</span>
+      <span><i style="background:repeating-linear-gradient(90deg,var(--s-jvm) 0 3px,transparent 3px 6px)"></i>JVM heap used</span>
     </div>
     <svg id="mem"></svg>
+  </section>
+
+  <section class="card">
+    <h2>GC time</h2>
+    <div class="sub">Share of wall-clock time the JVM spent in garbage-collection pauses, from the agent's <code>jvm.gc.duration</code> (all collectors, 1-minute window)</div>
+    <svg id="gc" class="small"></svg>
   </section>
 
   <section class="sofar" id="sofar" style="display:none"><h2>Story so far</h2><ol id="sofarlist"></ol></section>
@@ -223,6 +243,10 @@ const SERIES = {
     {k: 'req', get: s => s.mem.req, color: 'var(--s-request)', name: 'request'},
     {k: 'target', get: s => s.mem.target, color: 'var(--s-target)', name: 'target'},
     {k: 'jvm', get: s => s.jvm && s.jvm.maxHeap, color: 'var(--s-jvm)', name: 'max heap'},
+    {k: 'used', get: s => s.otel && s.otel.heapUsed, color: 'var(--s-jvm)', name: 'heap used', dash: '4 3'},
+  ],
+  gc: [
+    {k: 'gc', get: s => s.gcRatio, color: 'var(--s-limit)', name: 'GC time'},
   ],
   cpu: [
     {k: 'lim', get: s => s.cpu.lim, color: 'var(--s-limit)', name: 'limit'},
@@ -234,16 +258,17 @@ const SERIES = {
 
 function draw(id, res, samples, events, fmt, range, cursor) {
   const svg = $('#' + id);
-  const W = svg.clientWidth || 600, H = 290, L = 54, R = 118, T = 52, B = 26;  // T leaves a strip for event flags
+  const small = svg.classList.contains('small');
+  const W = svg.clientWidth || 600, H = small ? 150 : 290, L = 54, R = 118, T = small ? 14 : 52, B = 26;  // T leaves a strip for event flags
   const pw = W - L - R, ph = H - T - B;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   if (samples.length < 2) { svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle">waiting for samples…</text>`; return; }
   const t0 = range ? range[0] : samples[0].t, t1 = range ? range[1] : samples[samples.length - 1].t;
-  const band = samples.map(s => [s[res].lower, s[res].upper]);
+  const band = samples.map(s => s[res] ? [s[res].lower, s[res].upper] : [null, null]);
   let vmax = 0;
   for (const s of samples) {
     for (const ser of SERIES[res]) vmax = Math.max(vmax, ser.get(s) || 0);
-    vmax = Math.max(vmax, s[res].target || 0);  // the band's upper bound may sit at maxAllowed; clip it instead
+    vmax = Math.max(vmax, (s[res] && s[res].target) || 0);  // the band's upper bound may sit at maxAllowed; clip it instead
   }
   vmax = vmax * 1.12 || 1;
   const X = t => L + (t - t0) / Math.max(1, t1 - t0) * pw;
@@ -260,7 +285,7 @@ function draw(id, res, samples, events, fmt, range, cursor) {
   samples.forEach((s, i) => { if (band[i][0] != null && band[i][1] != null) { up.push(`${X(s.t)},${Y(band[i][1])}`); lo.push(`${X(s.t)},${Y(band[i][0])}`); } });
   if (up.length) out += `<polygon points="${up.join(' ')} ${lo.reverse().join(' ')}" fill="var(--band)"/>`;
   // event markers: a dashed line plus a numbered flag with a short tag
-  const flagged = events.filter(e => e.t >= t0 && e.t <= t1 && !quiet(e));
+  const flagged = small ? [] : events.filter(e => e.t >= t0 && e.t <= t1 && !quiet(e));
   let lastFx = -1e9, row = 0;
   flagged.forEach(e => {
     const x = X(e.t);
@@ -280,7 +305,7 @@ function draw(id, res, samples, events, fmt, range, cursor) {
       d += prev == null ? `M${x},${y}` : `H${x}V${y}`;
       prev = v;
     }
-    if (d) { out += `<path d="${d}" fill="none" stroke="${ser.color}" stroke-width="2" stroke-linejoin="round"/>`;
+    if (d) { out += `<path d="${d}" fill="none" stroke="${ser.color}" stroke-width="2" stroke-linejoin="round"${ser.dash ? ` stroke-dasharray="${ser.dash}"` : ''}/>`;
       const last = ser.get(samples[samples.length - 1]);
       if (last != null) ends.push({y: Y(last), text: `${ser.name} ${fmt(last)}`, color: ser.color}); }
   }
@@ -308,8 +333,8 @@ function draw(id, res, samples, events, fmt, range, cursor) {
     const near = events.filter(e => Math.abs(e.t - s.t) < Math.max(15, (t1 - t0) / 60));
     tip.innerHTML = `<b>${fmtT(s.t)}</b>` +
       SERIES[res].map(ser => `<div class="row"><span><i style="display:inline-block;width:8px;height:8px;border-radius:4px;background:${ser.color};margin-right:5px"></i>${ser.name}</span><b>${fmt(ser.get(s))}</b></div>`).join('') +
-      `<div class="row"><span>VPA bounds</span><span>${fmt(s[res].lower)} – ${fmt(s[res].upper)}</span></div>` +
-      (s[res].uncapped != null && s[res].uncapped !== s[res].target ? `<div class="row"><span>uncapped target</span><span>${fmt(s[res].uncapped)}</span></div>` : '') +
+      (s[res] ? `<div class="row"><span>VPA bounds</span><span>${fmt(s[res].lower)} – ${fmt(s[res].upper)}</span></div>` +
+      (s[res].uncapped != null && s[res].uncapped !== s[res].target ? `<div class="row"><span>uncapped target</span><span>${fmt(s[res].uncapped)}</span></div>` : '') : '') +
       near.map(e => `<div style="margin-top:4px;color:var(--${e.type === 'Warning' ? 'warn' : 'ink-2'})">⚑ ${e.reason}: ${e.message.slice(0, 90)}</div>`).join('');
     tip.style.display = 'block';
     tip.style.left = Math.min(ev.clientX + 14, innerWidth - 330) + 'px';
@@ -345,7 +370,7 @@ function tiles(st) {
     row('JVM max heap', j.maxHeap ? `${fmtMem(j.maxHeap)} <small>${headroom != null ? `${fmtMem(headroom)} of the limit is non-heap room` : ''}</small>` : '<small>unreachable</small>', j.maxHeap && s.mem.lim && headroom > s.mem.lim * 0.4 ? 'warn' : '') +
     row('availableProcessors()', j.procs != null ? `${j.procs} <small>from a ${fmtCpu(s.cpu.lim)} limit</small>` : '–') +
     `</dl></div>`;
-  $('#tiles').innerHTML = vpa + pod;
+  $('#tiles').innerHTML = vpa + pod + jvmCard(st);
   if (lastRestarts != null && s.restarts !== lastRestarts) $('#podtile').classList.add('flash');
   lastRestarts = s.restarts;
 }
@@ -359,6 +384,47 @@ function eventsTable(evs) {
       <td>${e.kind || ''}/${e.name || ''}</td><td class="m">${(e.message || '').replace(/</g, '&lt;')}</td></tr>`;
   });
   $('#evbody').innerHTML = rows.join('') || '<tr><td colspan="5" class="m">no events yet</td></tr>';
+}
+
+// ---------------------------------------------------------------- JVM (OpenTelemetry)
+const gcTotal = o => Object.values((o && o.gc) || {}).reduce((a, g) => ({count: a.count + (g.count || 0), sum: a.sum + (g.sum || 0)}), {count: 0, sum: 0});
+// Per sample: GC pause time as a share of wall clock and pauses/min, from
+// counter deltas over about a minute (reset on restart: counters go backwards).
+function deriveGc(samples) {
+  for (let i = 0; i < samples.length; i++) {
+    const b = samples[i]; b.gcRatio = null; b.gcPerMin = null;
+    if (!b.otel) continue;
+    let j = i - 1; while (j >= 0 && b.t - samples[j].t < 55) j--;
+    const a = samples[j]; if (!a || !a.otel || a.pod !== b.pod) continue;
+    const ta = gcTotal(a.otel), tb = gcTotal(b.otel);
+    if (tb.sum < ta.sum || tb.count < ta.count) continue;  // restarted in between
+    const dt = b.t - a.t; if (dt <= 0) continue;
+    b.gcRatio = (tb.sum - ta.sum) / dt; b.gcPerMin = (tb.count - ta.count) / dt * 60;
+  }
+}
+const fmtPct = x => x == null ? '–' : (x * 100).toFixed(x < 0.01 ? 2 : 1) + '%';
+
+function jvmCard(st) {
+  const s = st.samples[st.samples.length - 1]; const o = s && s.otel;
+  if (!o) return `<div class="tile jvm"><h2>JVM · OpenTelemetry</h2><dl><dt>Agent metrics</dt><dd><small>none for this pod yet: the agent exports every 15 s to the Collector, and the watcher reads the Collector's Prometheus endpoint</small></dd></dl></div>`;
+  const row = (k, v, c = '') => `<dt>${k}</dt><dd class="${c}">${v}</dd>`;
+  const bar = (x, warn) => `<span class="bar"><i style="width:${Math.min(100, Math.round(x * 100))}%"></i></span>`;
+  const heapPct = o.heapLimit ? o.heapUsed / o.heapLimit : null;
+  const gcs = Object.entries(o.gc || {}).sort();
+  // per-collector rate over the same window as gcRatio
+  let j = st.samples.length - 2; while (j >= 0 && s.t - st.samples[j].t < 55) j--;
+  const prev = j >= 0 && st.samples[j].otel && st.samples[j].pod === s.pod ? st.samples[j].otel : null;
+  const per = gcs.map(([n, g]) => { const p = prev && prev.gc && prev.gc[n]; const dc = p && g.count >= p.count ? g.count - p.count : null;
+    const ds = p && g.sum >= p.sum ? g.sum - p.sum : null; const avg = g.count ? g.sum / g.count : 0;
+    return `<div><b>${n.replace(' Generation', '')}</b><br>${Math.round(g.count || 0)} pauses, avg ${(avg * 1000).toFixed(1)} ms${dc != null ? `<br>${Math.round(dc)} in the last ${Math.round(s.t - st.samples[j].t)} s` : ''}</div>`; }).join('');
+  return `<div class="tile jvm"><h2>JVM · OpenTelemetry · ${s.pod ? s.pod.replace(/^.*-(\w+)$/, '…$1') : ''}</h2><dl>` +
+    row('Time in GC', `${fmtPct(s.gcRatio)} <small>${s.gcPerMin != null ? `${s.gcPerMin.toFixed(1)} pauses/min` : 'needs a minute of samples'}</small>`, (s.gcRatio > 0.05 ? 'warn' : s.gcRatio != null && s.gcRatio < 0.02 ? 'good' : '') + ' big') +
+    row('Heap used', `${fmtMem(o.heapUsed)} of ${fmtMem(o.heapLimit)}${heapPct != null ? ` <small>${fmtPct(heapPct)}</small>${bar(heapPct)}` : ''}`, heapPct > 0.9 ? 'warn' : '') +
+    row('Heap committed', `${fmtMem(o.heapCommitted)} <small>reserved from the container so far</small>`) +
+    row('Non-heap used', `${fmtMem(o.nonHeapUsed)} <small>metaspace, code cache, class space: outside MaxRAMPercentage</small>`) +
+    row('Threads · classes', `${o.threads ?? '–'} · ${o.classes != null ? Math.round(o.classes) : '–'} <small>thread stacks live outside the heap</small>`) +
+    row('CPU (JVM view)', `${fmtPct(o.cpu)} <small>of availableProcessors()</small>`) +
+    `</dl><div class="gcrow">${per}</div></div>`;
 }
 
 // ---------------------------------------------------------------- narration
@@ -433,6 +499,11 @@ function narrate(samples, events) {
     }
     if (!below) crossed = false;
     const capped = s => s.policy && s.policy.maxCpu && s.cpu.target != null && Math.abs(s.cpu.target - s.policy.maxCpu) < 1e-6;
+    // GC pressure: sustained share of wall clock in pauses
+    if (b.gcRatio != null && b.gcRatio > 0.05 && !(a.gcRatio > 0.05))
+      story.push({t: b.t, warn: true, pod: b.pod, head: `GC pressure: ${fmtPct(b.gcRatio)} of time in pauses`, body:
+        `${b.gcPerMin != null ? `${b.gcPerMin.toFixed(0)} pauses per minute. ` : ''}Heap used ${fmtMem(b.otel.heapUsed)} of ${fmtMem(b.otel.heapLimit)}.`,
+        why: 'Above a few percent, the collector is running constantly to free a little space at a time: live data is close to the max heap, or the CPU limit is starving the GC threads. Either way latency rises before anything crashes, and a dashboard that only shows container memory sees nothing wrong. The fix is a bigger heap (via the limit and MaxRAMPercentage), fewer live objects, or more CPU; not a VPA memory bump that the running JVM can\'t use.'});
     if (capped(b) && !capped(a))
       story.push({t: b.t, head: 'CPU recommendation hit maxAllowed', body:
         `Target is capped at ${fmtCpu(b.policy.maxCpu)}${b.cpu.uncapped && b.cpu.uncapped > b.policy.maxCpu ? `; the uncapped target is ${fmtCpu(b.cpu.uncapped)}` : ''}. maxAllowed caps the request, not the limit.`,
@@ -447,6 +518,9 @@ function narrate(samples, events) {
 function pending(samples) {
   const s = samples[samples.length - 1]; if (!s) return ['', false];
   const rp = s.resizePolicy || {};
+  const o = s.otel;
+  if (o && o.heapLimit && o.heapUsed / o.heapLimit > 0.9)
+    return [`<b>Heap is ${fmtPct(o.heapUsed / o.heapLimit)} full</b> (${fmtMem(o.heapUsed)} of ${fmtMem(o.heapLimit)}) and GC is at ${fmtPct(s.gcRatio)}: an OutOfMemoryError is likely before the VPA does anything. The container limit is ${fmtMem(s.mem.lim)}; the JVM can\'t use the difference without a restart.`, true];
   if (!s.recProvided) return ['Waiting for the recommender: no recommendation yet. It needs a few minutes of samples.', true];
   if (!s.mode || s.mode === 'Off') return [`Mode <b>Off</b>: the VPA recommends and nothing changes on the pod. Target now ${fmtCpu(s.cpu.target)} CPU, ${fmtMem(s.mem.target)} memory.`, false];
   if (s.mode === 'Initial') return ['Mode <b>Initial</b>: the recommendation is applied only when a new pod is created.', false];
@@ -525,6 +599,7 @@ function render() {
   if (CUTOFF != null) { range = span(); st.samples = st.samples.filter(s => s.t <= CUTOFF); st.events = st.events.filter(e => e.t <= CUTOFF); }
   else if (WINDOW && st.samples.length) { const cut = st.samples[st.samples.length - 1].t - WINDOW; st.samples = st.samples.filter(s => s.t >= cut); }
   setMode();
+  deriveGc(st.samples);
   try {
     const m = st.meta || {};
     const story = narrate(st.samples, st.events);
@@ -540,6 +615,7 @@ function render() {
     $('#err').textContent = st.error ? 'poll error (showing last good data): ' + st.error : '';
     tiles(st);
     draw('mem', 'mem', st.samples, st.events, fmtMem, range, CUTOFF);
+    draw('gc', 'gc', st.samples, st.events, fmtPct, range, CUTOFF);
     eventsTable(st.events);
   } catch (e) { $('#err').textContent = 'render error: ' + e; }
 }

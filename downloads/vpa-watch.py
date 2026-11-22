@@ -20,6 +20,8 @@ POLL = int(os.environ.get("POLL_SECONDS", "10"))
 KEEP = int(os.environ.get("KEEP_SAMPLES", "1080"))  # 3h at 10s
 PORT = int(os.environ.get("PORT", "8080"))
 RUNS_DIR = os.environ.get("RUNS_DIR", "/app/runs")  # saved runs, served at /runs/<name>.json
+# The Collector's Prometheus exporter: the OTel Java agent's view of the JVM.
+OTEL_URL = os.environ.get("OTEL_METRICS_URL", "http://otel-collector:8889/metrics")
 DEMO = "--demo" in sys.argv
 
 STATE = {"samples": [], "events": {}, "meta": {}, "error": None, "note": None}
@@ -60,6 +62,46 @@ def jvm_view():
                 "usedHeap": int(d.get("used", 0)) * 2**20}
     except Exception:
         return None
+
+def parse_prom(text):
+    """Prometheus text -> list of (name, {labels}, value)."""
+    out = []
+    for line in text.splitlines():
+        if not line or line[0] == "#": continue
+        m = re.match(r'^([A-Za-z_:][\w:]*)(\{(.*)\})?\s+(\S+)', line)
+        if not m: continue
+        labels = dict(re.findall(r'(\w+)="((?:[^"\\]|\\.)*)"', m.group(3) or ""))
+        try: out.append((m.group(1), labels, float(m.group(4))))
+        except ValueError: pass
+    return out
+
+def otel_view(podname):
+    """JVM runtime metrics for one pod, as the OTel Java agent reports them."""
+    if not podname: return None
+    try:
+        with urllib.request.urlopen(OTEL_URL, timeout=4) as r:
+            rows = [x for x in parse_prom(r.read().decode()) if x[1].get("k8s_pod_name") == podname]
+    except Exception:
+        return None
+    if not rows: return None
+    v = {"heapUsed": 0, "heapCommitted": 0, "nonHeapUsed": 0, "heapLimit": 0,
+         "pools": {}, "gc": {}, "threads": None, "classes": None, "cpu": None}
+    for name, l, val in rows:
+        t = l.get("jvm_memory_type"); pool = l.get("jvm_memory_pool_name")
+        if name == "jvm_memory_used_bytes":
+            if t == "heap": v["heapUsed"] += val
+            elif t == "non_heap": v["nonHeapUsed"] += val
+            if pool: v["pools"][pool] = {"type": t, "used": val}
+        elif name == "jvm_memory_committed_bytes" and t == "heap": v["heapCommitted"] += val
+        elif name == "jvm_memory_limit_bytes" and t == "heap": v["heapLimit"] += val
+        elif name == "jvm_gc_duration_seconds_count":
+            v["gc"].setdefault(l.get("jvm_gc_name", "?"), {})["count"] = val
+        elif name == "jvm_gc_duration_seconds_sum":
+            v["gc"].setdefault(l.get("jvm_gc_name", "?"), {})["sum"] = val
+        elif name == "jvm_thread_count": v["threads"] = val
+        elif name == "jvm_class_count": v["classes"] = val
+        elif name == "jvm_cpu_recent_utilization_ratio": v["cpu"] = val
+    return v
 
 def poll_once(get):
     now = time.time()
@@ -120,6 +162,7 @@ def poll_once(get):
                 "upper": qty(rec.get("upperBound", {}).get("memory")),
                 "uncapped": qty(rec.get("uncappedTarget", {}).get("memory"))},
         "jvm": jvm_view(),
+        "otel": otel_view(podname),
     }
     meta = {"namespace": NS, "vpa": VPA, "container": CONTAINER,
             "updateMode": vpa.get("spec", {}).get("updatePolicy", {}).get("updateMode"),
@@ -199,6 +242,15 @@ def demo_step(now=None):
                  "lower": tgt_mem*0.85, "upper": tgt_mem*1.3, "uncapped": tgt_mem},
          "jvm": {"procs": procs, "maxHeap": heap,
                  "usedHeap": min(heap*0.85, 20*Mi + el*250e3) if el < 720 else 160*Mi}}
+    used = s["jvm"]["usedHeap"] + (300*Mi if 700 < el < 720 else 0)
+    pressure = min(1.0, used / heap)
+    gcs = int(max(0, el - 5) * (0.4 + 6 * pressure**4))     # pauses so far
+    s["otel"] = {"heapUsed": min(used, heap * 0.98), "heapCommitted": heap * 0.9, "nonHeapUsed": 62*Mi + el * 20e3,
+                 "heapLimit": heap, "threads": 24 + (4 if 480 < el else 0), "classes": 4100 + el * 0.5,
+                 "cpu": min(0.98, 0.05 + pressure * 0.3 + (0.4 if 480 < el < 1400 else 0)),
+                 "pools": {}, "gc": {"G1 Young Generation": {"count": gcs, "sum": gcs * (0.004 + 0.06 * pressure**3)},
+                                     "G1 Old Generation": {"count": int(gcs / 40), "sum": int(gcs / 40) * 0.12},
+                                     "G1 Concurrent GC": {"count": int(gcs / 20), "sum": int(gcs / 20) * 0.03}}}
     evs = {}
     def ev(k, t, kind, name, reason, typ, msg, src):
         if el >= t: evs[k] = {"t": DEMO_T0 + t, "kind": kind, "name": name, "reason": reason,

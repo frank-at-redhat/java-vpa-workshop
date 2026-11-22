@@ -103,7 +103,8 @@ oc apply -f vpa-off.yaml
 . While the recommender warms up, deploy *VPA Watch*, a small page that
 runs in your project and shows what the VPA is doing and when: the
 recommendation and its bounds, the pod's actual requests and limits, the
-JVM's own view, and every VPA and kubelet event, on one live timeline.
+JVM's own view, the agent's JVM metrics from Module 2 (heap, non-heap, GC
+time, threads), and every VPA and kubelet event, on one live timeline.
 It reads through its own ServiceAccount; the `Role` grants only `get` and
 `list` on pods, events and VPAs in this project:
 +

@@ -137,6 +137,18 @@ ConfigMap (the manifest's header shows how) and it appears under *saved*
 on the page, so you can replay the complete Module 4 story before
 attendees have produced one.
 
+=== The updater shrinks pods too
+
+Leave the Module 4 pod alone for an hour after the load stops and the
+updater resizes it back *down*: the recommendation decays, the pod's
+request ends up above the upper bound, and that is out-of-bounds just like
+being below it.
+With `RestartContainer` on memory, the shrink restarts the container.
+Mention it in Module 5 under the resize-policy trade-off: in production
+that is the "why did my pod restart at 3 a.m." ticket, and the answer is a
+`minAllowed` close to the real floor, or `Initial` mode for anything that
+must not restart on VPA's schedule.
+
 === Module 4 is the point of the workshop
 
 If time is short, cut Exercise 2 of Module 1 and the `oc` metric queries in

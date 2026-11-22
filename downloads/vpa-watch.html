@@ -31,13 +31,18 @@ header .meta { color: var(--ink-2); font-size: 13px; }
 header .meta b { color: var(--ink); font-weight: 600; }
 #err { color: var(--warn); font-size: 13px; padding: 0 16px; min-height: 18px; }
 main { display: grid; gap: 12px; padding: 8px 16px 24px; grid-template-columns: 1fr; }
-.tiles { grid-column: 1 / -1; display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tiles { grid-column: 1 / -1; display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .tile, .card { background: var(--surface); border: 1px solid var(--ring);
   border-radius: 8px; padding: 10px 12px; }
-.tile .k { color: var(--muted); font-size: 12px; }
-.tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
-.tile .v small { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.tile h2 { font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--ink-2); }
+.tile dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 13px; }
+.tile dt { color: var(--muted); }
+.tile dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tile dd small { color: var(--ink-2); }
+.tile dd.big { font-size: 20px; font-weight: 600; line-height: 1.2; }
+.tile dd.warn { color: var(--warn); }
+.tile dd.good { color: var(--good); }
 .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
 .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px;
@@ -112,9 +117,9 @@ body.kiosk header h1 { font-size: 22px; }
 body.kiosk .now .head { font-size: 26px; }
 body.kiosk .now .body { font-size: 17px; }
 body.kiosk .pending { font-size: 16px; }
-body.kiosk .tile .v { font-size: 22px; }
-body.kiosk .tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-body.kiosk .tile .k { font-size: 14px; }
+body.kiosk .tile dl { font-size: 15px; }
+body.kiosk .tile dd.big { font-size: 24px; }
+body.kiosk .tile h2 { font-size: 15px; }
 body.kiosk svg { height: 350px; }
 body.kiosk svg text { font-size: 13px; }
 body.kiosk .flag text { font-size: 12px; }
@@ -291,19 +296,31 @@ function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x))); const 
 
 function tiles(st) {
   const s = st.samples[st.samples.length - 1] || {cpu: {}, mem: {}};
-  const m = st.meta || {}, j = s.jvm || {};
-  const headroom = j.maxHeap && s.mem.lim ? Math.round((s.mem.lim - j.maxHeap) / Mi) : null;
-  const items = [
-    ['Update mode', m.updateMode || '–', ''],
-    ['Pod', s.pod ? s.pod.replace(/^.*-(\w+)$/, '…$1') : '–', ''],
-    ['Container restarts', s.restarts ?? '–', ''],
-    ['Recommendation', (m.conditions || {}).RecommendationProvided === 'True' ? 'provided' : 'pending', ''],
-    ['JVM max heap', fmtMem(j.maxHeap), headroom != null ? `${headroom} Mi non-heap room` : ''],
-    ['availableProcessors()', j.procs ?? '–', s.cpu.lim ? `limit ${fmtCpu(s.cpu.lim)}` : ''],
-  ];
-  const el = $('#tiles');
-  el.innerHTML = items.map(([k, v, sub]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}${sub ? ` <small>${sub}</small>` : ''}</div></div>`).join('');
-  if (lastRestarts != null && s.restarts !== lastRestarts) el.children[2].classList.add('flash');
+  const m = st.meta || {}, j = s.jvm || {}, p = s.policy || {}, rp = s.resizePolicy || {};
+  const rec = (m.conditions || {}).RecommendationProvided === 'True';
+  const inBounds = s.cpu.req != null && s.cpu.lower != null &&
+    !(s.cpu.req < s.cpu.lower || s.cpu.req > s.cpu.upper || s.mem.req < s.mem.lower || s.mem.req > s.mem.upper);
+  const headroom = j.maxHeap && s.mem.lim ? s.mem.lim - j.maxHeap : null;
+  const row = (k, v, c = '') => `<dt>${k}</dt><dd class="${c}">${v}</dd>`;
+  const vpa = `<div class="tile"><h2>Current VPA configuration · ${m.vpa || ''}</h2><dl>` +
+    row('Update mode', `${s.mode || m.updateMode || '–'}`, 'big') +
+    row('Recommendation', rec ? `provided${s.cpu.req != null && s.cpu.lower != null ? ` · request is <b>${inBounds ? 'inside' : 'outside'}</b> the bounds` : ''}` : 'pending', rec ? '' : 'warn') +
+    row('Memory target', `${fmtMem(s.mem.target)} <small>bounds ${fmtMem(s.mem.lower)} – ${fmtMem(s.mem.upper)}${s.mem.uncapped != null && s.mem.uncapped !== s.mem.target ? `, uncapped ${fmtMem(s.mem.uncapped)}` : ''}</small>`) +
+    row('CPU target', `${fmtCpu(s.cpu.target)} <small>bounds ${fmtCpu(s.cpu.lower)} – ${fmtCpu(s.cpu.upper)}${s.cpu.uncapped != null && s.cpu.uncapped !== s.cpu.target ? `, uncapped ${fmtCpu(s.cpu.uncapped)}` : ''}</small>`) +
+    row('Allowed', p.minMem != null ? `${fmtMem(p.minMem)} – ${fmtMem(p.maxMem)} memory, ${fmtCpu(p.minCpu)} – ${fmtCpu(p.maxCpu)} CPU` : 'no resourcePolicy') +
+    row('Controls', `${p.controlledValues || 'RequestsAndLimits'}${p.controlledResources ? ` <small>(${p.controlledResources.join(', ')})</small>` : ''}`) +
+    row('minReplicas', s.minReplicas != null ? `${s.minReplicas} <small>on this VPA</small>` : `<small>Operator default (2 unless patched)</small>`) +
+    `</dl></div>`;
+  const pod = `<div class="tile" id="podtile"><h2>Current pod · ${s.pod || '–'}</h2><dl>` +
+    row('Container restarts', `${s.restarts ?? '–'}`, 'big') +
+    row('Memory', `limit ${fmtMem(s.mem.lim)} · request ${fmtMem(s.mem.req)}`) +
+    row('CPU', `limit ${fmtCpu(s.cpu.lim)} · request ${fmtCpu(s.cpu.req)}`) +
+    row('Resize policy', rp.memory || rp.cpu ? `memory <b>${rp.memory || 'NotRequired'}</b> · cpu ${rp.cpu || 'NotRequired'}` : '<small>not set (defaults to NotRequired)</small>') +
+    row('JVM max heap', j.maxHeap ? `${fmtMem(j.maxHeap)} <small>${headroom != null ? `${fmtMem(headroom)} of the limit is non-heap room` : ''}</small>` : '<small>unreachable</small>', j.maxHeap && s.mem.lim && headroom > s.mem.lim * 0.4 ? 'warn' : '') +
+    row('availableProcessors()', j.procs != null ? `${j.procs} <small>from a ${fmtCpu(s.cpu.lim)} limit</small>` : '–') +
+    `</dl></div>`;
+  $('#tiles').innerHTML = vpa + pod;
+  if (lastRestarts != null && s.restarts !== lastRestarts) $('#podtile').classList.add('flash');
   lastRestarts = s.restarts;
 }
 

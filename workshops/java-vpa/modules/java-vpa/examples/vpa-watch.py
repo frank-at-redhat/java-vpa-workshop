@@ -97,10 +97,13 @@ def poll_once(get):
             pol = {"minCpu": qty(c.get("minAllowed", {}).get("cpu")),
                    "maxCpu": qty(c.get("maxAllowed", {}).get("cpu")),
                    "minMem": qty(c.get("minAllowed", {}).get("memory")),
-                   "maxMem": qty(c.get("maxAllowed", {}).get("memory"))}
+                   "maxMem": qty(c.get("maxAllowed", {}).get("memory")),
+                   "controlledValues": c.get("controlledValues", "RequestsAndLimits"),
+                   "controlledResources": c.get("controlledResources", ["cpu", "memory"])}
     sample = {
         "t": now, "pod": podname, "restarts": restarts, "resize": resize,
         "mode": spec.get("updatePolicy", {}).get("updateMode"),
+        "minReplicas": spec.get("updatePolicy", {}).get("minReplicas"),
         "resizePolicy": rpol, "policy": pol,
         "recProvided": conds.get("RecommendationProvided") == "True",
         "cpu": {"req": qty(res.get("requests", {}).get("cpu")),
@@ -186,7 +189,9 @@ def demo_step(now=None):
          "recProvided": el > 5,
          "resizePolicy": {"cpu": "NotRequired",
                           "memory": "NotRequired" if el < 900 else "RestartContainer"},
-         "policy": {"minCpu": 0.1, "maxCpu": 2.0, "minMem": 256*Mi, "maxMem": 2*Gi},
+         "minReplicas": None if el < 300 else 1,
+         "policy": {"minCpu": 0.1, "maxCpu": 2.0, "minMem": 256*Mi, "maxMem": 2*Gi,
+                    "controlledValues": "RequestsAndLimits", "controlledResources": ["cpu", "memory"]},
          "cpu": {"req": cpu_lim/5 if el <= 480 else 2.0, "lim": cpu_lim, "target": tgt_cpu,
                  "lower": tgt_cpu*0.6, "upper": min(2.0, tgt_cpu*1.6), "uncapped": tgt_cpu*1.5},
          "mem": {"req": mem_lim/2 if el <= 480 else 548*Mi, "lim": mem_lim, "target": tgt_mem,

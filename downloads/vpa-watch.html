@@ -195,11 +195,6 @@ body.kiosk svg.small { height: 180px; }
     <svg id="mem"></svg>
   </section>
 
-  <section class="card">
-    <h2>GC time</h2>
-    <div class="sub">Share of wall-clock time the JVM spent in garbage-collection pauses, from the agent's <code>jvm.gc.duration</code> (all collectors, 1-minute window)</div>
-    <svg id="gc" class="small"></svg>
-  </section>
 
   <section class="sofar" id="sofar" style="display:none"><h2>Story so far</h2><ol id="sofarlist"></ol></section>
 
@@ -244,9 +239,6 @@ const SERIES = {
     {k: 'target', get: s => s.mem.target, color: 'var(--s-target)', name: 'target'},
     {k: 'jvm', get: s => s.jvm && s.jvm.maxHeap, color: 'var(--s-jvm)', name: 'max heap'},
     {k: 'used', get: s => s.otel && s.otel.heapUsed, color: 'var(--s-jvm)', name: 'heap used', dash: '4 3'},
-  ],
-  gc: [
-    {k: 'gc', get: s => s.gcRatio, color: 'var(--s-limit)', name: 'GC time'},
   ],
   cpu: [
     {k: 'lim', get: s => s.cpu.lim, color: 'var(--s-limit)', name: 'limit'},
@@ -630,7 +622,6 @@ function render() {
     $('#err').textContent = st.error ? 'poll error (showing last good data): ' + st.error : '';
     tiles(st);
     draw('mem', 'mem', st.samples, st.events, fmtMem, range, CUTOFF);
-    draw('gc', 'gc', st.samples, st.events, fmtPct, range, CUTOFF);
     eventsTable(st.events);
   } catch (e) { $('#err').textContent = 'render error: ' + e; }
 }

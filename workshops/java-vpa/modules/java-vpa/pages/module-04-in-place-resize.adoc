@@ -288,9 +288,10 @@ availableProcessors=3 maxHeap=759MiB totalHeap=27MiB used=22MiB
 Same pod, one restart, and *now* `maxHeap` is 759 MiB: 75% of the limit it
 re-read on startup.
 On VPA Watch the headline turns red, *Container crashed and restarted*,
-with the heap before and after; a red flag tagged *OOM restart* marks the
-moment and *JVM max heap* finally steps up to meet the limit, several
-minutes after the limit itself moved.
+with the heap before and after; a red flag marks the moment (*crash
+restart*, or *OOM restart* when the kubelet logged a `BackOff`) and *JVM
+max heap* finally steps up to meet the limit, several minutes after the
+limit itself moved.
 The resize "worked", one crash later.
 That crash is what `RestartContainer` on memory turns into a controlled
 restart.

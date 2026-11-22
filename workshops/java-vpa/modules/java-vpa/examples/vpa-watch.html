@@ -189,8 +189,9 @@ const TAGS = {
   RecommendationProvided: 'recommendation', FailedScheduling: 'unschedulable',
 };
 const QUIET = new Set(['Started', 'Created', 'Scheduled', 'Pulled', 'Pulling', 'ResizeStarted',
-  'ScalingReplicaSet', 'SuccessfulCreate', 'SuccessfulDelete', 'AddedInterface']);  // table only, no flag
-const tagOf = e => TAGS[e.reason] || (e.reason || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  'ScalingReplicaSet', 'SuccessfulCreate', 'SuccessfulDelete', 'AddedInterface', 'Unhealthy']);  // table only, no flag
+const quiet = e => QUIET.has(e.reason) || (e.reason === 'Killing' && !/resize/i.test(e.message || ''));
+const tagOf = e => e.reason === 'Restart' ? 'crash restart' : TAGS[e.reason] || (e.reason || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
 const cls = e => e.kind === 'Note' ? 'note' : e.type === 'Warning' ? 'warn' : '';
 
 const SERIES = {
@@ -219,11 +220,11 @@ function draw(id, res, samples, events, fmt) {
   let vmax = 0;
   for (const s of samples) {
     for (const ser of SERIES[res]) vmax = Math.max(vmax, ser.get(s) || 0);
-    vmax = Math.max(vmax, s[res].upper || 0);
+    vmax = Math.max(vmax, s[res].target || 0);  // the band's upper bound may sit at maxAllowed; clip it instead
   }
   vmax = vmax * 1.12 || 1;
   const X = t => L + (t - t0) / Math.max(1, t1 - t0) * pw;
-  const Y = v => T + ph - (v / vmax) * ph;
+  const Y = v => T + ph - (Math.min(v, vmax) / vmax) * ph;
   let out = '';
   // grid: 4 lines, nice values
   const step = niceStep(vmax / 4);
@@ -236,7 +237,7 @@ function draw(id, res, samples, events, fmt) {
   samples.forEach((s, i) => { if (band[i][0] != null && band[i][1] != null) { up.push(`${X(s.t)},${Y(band[i][1])}`); lo.push(`${X(s.t)},${Y(band[i][0])}`); } });
   if (up.length) out += `<polygon points="${up.join(' ')} ${lo.reverse().join(' ')}" fill="var(--band)"/>`;
   // event markers: a dashed line plus a numbered flag with a short tag
-  const flagged = events.filter(e => e.t >= t0 && e.t <= t1 && !QUIET.has(e.reason));
+  const flagged = events.filter(e => e.t >= t0 && e.t <= t1 && !quiet(e));
   let lastFx = -1e9, row = 0;
   flagged.forEach(e => {
     const x = X(e.t);
@@ -317,7 +318,7 @@ function eventsTable(evs) {
     const key = e.t + e.reason + e.message;
     const fresh = !seenEvents.has(key); seenEvents.add(key);
     return `<tr class="${e.type === 'Warning' ? 'warn' : ''} ${fresh && seenEvents.size > 40 ? 'flash' : ''}">
-      <td class="n">${QUIET.has(e.reason) ? '' : e.n}</td><td class="t">${fmtT(e.t)}</td><td class="r"><b>${e.reason || ''}</b>${e.source ? `<span class="tag">${e.source}</span>` : ''}</td>
+      <td class="n">${e.n || ''}</td><td class="t">${fmtT(e.t)}</td><td class="r"><b>${e.reason || ''}</b>${e.source ? `<span class="tag">${e.source}</span>` : ''}</td>
       <td>${e.kind || ''}/${e.name || ''}</td><td class="m">${(e.message || '').replace(/</g, '&lt;')}</td></tr>`;
   });
   $('#evbody').innerHTML = rows.join('') || '<tr><td colspan="5" class="m">no events yet</td></tr>';
@@ -328,7 +329,7 @@ function eventsTable(evs) {
 // matters. A pure function of the data, so every viewer sees the same story.
 function narrate(samples, events) {
   const story = [];
-  const near = (t, reason, dt) => events.find(e => e.reason === reason && Math.abs(e.t - t) < dt);
+  const near = (t, reason, dt, pod) => events.find(e => e.reason === reason && (!pod || e.name === pod) && Math.abs(e.t - t) < dt);
   let crossed = false;
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1], b = samples[i];
@@ -344,7 +345,11 @@ function narrate(samples, events) {
     if (!a.recProvided && b.recProvided)
       story.push({t: b.t, head: 'First recommendation provided', body:
         `Target ${fmtCpu(b.cpu.target)} CPU, ${fmtMem(b.mem.target)} memory. Early numbers lean on the Operator minimums; they settle as history accumulates.`});
-    if (limChanged && !restarted && !newPod) {
+    // A memory change under RestartContainer, or any change while the JVM is
+    // unreachable, is a restart in progress: let the next sample narrate it.
+    const memChanged = a.mem.lim !== b.mem.lim;
+    const restartPending = (memChanged && (b.resizePolicy || {}).memory === 'RestartContainer') || (limChanged && !b.jvm);
+    if (limChanged && !restarted && !newPod && !restartPending) {
       const heapNote = heapA && heapB && heapA === heapB && b.mem.lim !== a.mem.lim
         ? ` The JVM's max heap did <b>not</b> change (still ${fmtMem(heapB)}): it reads the limit once, at startup.` : '';
       const procNote = a.jvm && b.jvm && a.jvm.procs !== b.jvm.procs ? ` availableProcessors() went ${a.jvm.procs} → ${b.jvm.procs}.` : '';
@@ -352,14 +357,15 @@ function narrate(samples, events) {
         `CPU limit ${fmtCpu(a.cpu.lim)} → ${fmtCpu(b.cpu.lim)}, memory limit ${fmtMem(a.mem.lim)} → ${fmtMem(b.mem.lim)}. Same pod, no restart.${procNote}${heapNote}`});
     }
     if (restarted) {
-      const oom = near(b.t, 'BackOff', 90) || near(b.t, 'OOMKilling', 90);
-      const policy = limChanged || near(b.t, 'Killing', 90);
+      const oom = near(b.t, 'BackOff', 90, b.pod) || near(b.t, 'OOMKilling', 90, b.pod);
+      const p0 = samples[i - 2];
+      const policy = limChanged || (p0 && p0.pod === b.pod && (p0.mem.lim !== b.mem.lim || p0.cpu.lim !== b.cpu.lim)) || near(b.t, 'Killing', 90, b.pod);
       const heap = heapA && heapB && heapA !== heapB ? ` Max heap ${fmtMem(heapA)} → ${fmtMem(heapB)}: the new JVM re-read the limit.` : '';
       if (policy && !oom)
         story.push({t: b.t, head: 'Container restarted by resize policy', body:
-          `Memory limit ${fmtMem(a.mem.lim)} → ${fmtMem(b.mem.lim)} with RestartContainer: a controlled restart, no crash.${heap}`});
+          `Memory limit ${fmtMem((p0 && p0.pod === b.pod ? p0 : a).mem.lim)} → ${fmtMem(b.mem.lim)} with RestartContainer: a controlled restart, no crash.${heap}`});
       else
-        story.push({t: b.t, warn: true, head: 'Container crashed and restarted', body:
+        story.push({t: b.t, warn: true, pod: b.pod, head: 'Container crashed and restarted', body:
           `Restart count ${a.restarts} → ${b.restarts}, same pod.${heap || ' Limits unchanged.'}` +
           (b.mem.lim && heapA && b.mem.lim > heapA * 1.3 ? ' The container had room; the heap did not.' : '')});
     }
@@ -421,8 +427,13 @@ async function tick() {
     const st = await (await fetch('/api/state', {cache: 'no-store'})).json();
     const m = st.meta || {};
     if (WINDOW && st.samples.length) { const cut = st.samples[st.samples.length - 1].t - WINDOW; st.samples = st.samples.filter(s => s.t >= cut); }
-    st.events.forEach((e, i) => e.n = i + 1);
-    renderStory(narrate(st.samples, st.events));
+    const story = narrate(st.samples, st.events);
+    // A crash the narration saw but the kubelet logged no Warning for gets its own marker.
+    for (const x of story) if (x.warn && !st.events.some(e => e.type === 'Warning' && Math.abs(e.t - x.t) < 60))
+      st.events.push({t: x.t - 5, kind: 'Pod', name: x.pod, reason: 'Restart', type: 'Warning', message: x.head, source: 'vpa-watch'});
+    st.events.sort((a, b) => a.t - b.t);
+    let n = 0; st.events.forEach(e => { if (!quiet(e)) e.n = ++n; });
+    renderStory(story);
     const [ptext, live] = pending(st.samples);
     $('#pending').className = 'pending' + (live ? ' live' : ''); $('#pending').innerHTML = `<span class="dot"></span>${ptext}`;
     $('#meta').innerHTML = `namespace <b>${m.namespace || '–'}</b> · VPA <b>${m.vpa || '–'}</b> · container <b>${m.container || '–'}</b> · ${st.samples.length} samples, every ${m.poll || '?'}s · ${st.samples.length ? 'span ' + fmtAge(st.samples[st.samples.length - 1].t - st.samples[0].t) : ''}`;

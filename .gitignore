@@ -25,3 +25,4 @@ Gemfile.lock
 
 # Written by scripts/list-downloads.py in the Pages and Release workflows
 content/modules/ROOT/partials/workshop-downloads.adoc
+__pycache__/

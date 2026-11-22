@@ -158,7 +158,7 @@ recommendation.
 On VPA Watch the headline changes to *Pod resized in place* and spells out
 the before and after, including that the JVM's max heap did not move.
 The *container limit* and *request* lines step up to meet the target and a
-numbered flag tagged *in-place resize* appears above both charts.
+numbered flag tagged *in-place resize* appears above the chart.
 +
 [source,text]
 ----

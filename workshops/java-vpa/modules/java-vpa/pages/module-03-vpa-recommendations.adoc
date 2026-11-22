@@ -131,11 +131,13 @@ oc get route vpa-watch -o jsonpath='https://{.spec.host}{"\n"}'
 +
 Open that URL in a browser tab and keep it open for the rest of the
 workshop.
-The two charts fill in as samples arrive, every 10 seconds.
+The chart fills in as samples arrive, every 10 seconds.
 The page narrates itself: the headline at the top describes the last thing
 that changed (a resize, a restart, a new recommendation) and the line under
 it says what the updater will or won't do next and why.
-Numbered flags above each chart match the numbers in the event table.
+Numbered flags above the chart match the numbers in the event table, and
+the *Story so far* list under it keeps every earlier headline with a
+short "why it matters".
 +
 [NOTE]
 ====
@@ -205,7 +207,7 @@ oc exec deploy/load -c load -- curl -s 'localhost:8080/alloc?mb=250'
 oc exec deploy/load -c load -- curl -s 'localhost:8080/cpu?t=4&s=300'
 ----
 
-. Watch the *VPA target* line on both VPA Watch charts climb, and the
+. Watch the *VPA target* line on the VPA Watch chart climb, and the
 *VPA lower–upper* band widen with it.
 The *container request* and *limit* lines don't move: this is `Off` mode.
 The same numbers, from the command line, every 30 seconds:

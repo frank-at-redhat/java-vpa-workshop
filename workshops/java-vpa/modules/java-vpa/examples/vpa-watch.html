@@ -88,9 +88,16 @@ td.m { color: var(--ink-2); }
 .sofar { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 8px 12px; }
 .sofar h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; color: var(--ink-2); }
 .sofar ol { margin: 0; padding-left: 22px; font-size: 13px; color: var(--ink-2); }
-.sofar li { padding: 2px 0; }
+.sofar li { padding: 6px 0; border-top: 1px solid var(--grid); }
+.sofar li:first-child { border-top: 0; }
 .sofar li b { color: var(--ink); font-weight: 600; }
 .sofar li.warn b { color: var(--warn); }
+.sofar li .head { color: var(--ink); font-weight: 600; }
+.sofar li .body { margin-top: 2px; }
+.why { margin-top: 6px; color: var(--ink-2); font-size: 13px; padding-left: 10px; border-left: 2px solid var(--grid); }
+.why::before { content: 'Why it matters: '; font-weight: 600; color: var(--ink); }
+body.kiosk .why { font-size: 15px; }
+body.kiosk .sofar li .body, body.kiosk .sofar li .why { font-size: 14px; }
 /* event flags on charts */
 .flag circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; }
 .flag.warn circle { stroke: var(--warn); }
@@ -143,19 +150,6 @@ body.kiosk .tip { display: none !important; }
       <span><i style="background:var(--s-jvm)"></i>JVM max heap</span>
     </div>
     <svg id="mem"></svg>
-  </section>
-
-  <section class="card">
-    <h2>CPU</h2>
-    <div class="sub">Same view for CPU; the JVM line is <code>availableProcessors()</code></div>
-    <div class="legend">
-      <span><i style="background:var(--s-limit)"></i>container limit</span>
-      <span><i style="background:var(--s-request)"></i>container request</span>
-      <span><i style="background:var(--s-target)"></i>VPA target</span>
-      <span><i class="band" style="background:var(--band)"></i>VPA lower–upper</span>
-      <span><i style="background:var(--s-jvm)"></i>availableProcessors()</span>
-    </div>
-    <svg id="cpu"></svg>
   </section>
 
   <section class="sofar" id="sofar" style="display:none"><h2>Story so far</h2><ol id="sofarlist"></ol></section>
@@ -336,15 +330,19 @@ function narrate(samples, events) {
     const restarted = b.pod === a.pod && b.restarts > a.restarts;
     const newPod = a.pod && b.pod && b.pod !== a.pod;
     const limChanged = a.mem.lim != null && b.mem.lim != null && (a.mem.lim !== b.mem.lim || a.cpu.lim !== b.cpu.lim);
-    const heapA = a.jvm && a.jvm.maxHeap, heapB = b.jvm && b.jvm.maxHeap;
+    const nxt = samples[i + 1];
+    const heapA = a.jvm && a.jvm.maxHeap, heapB = (b.jvm && b.jvm.maxHeap) || (nxt && nxt.pod === b.pod && nxt.jvm && nxt.jvm.maxHeap);
     if (a.mode && b.mode && a.mode !== b.mode)
       story.push({t: b.t, head: `VPA switched to ${b.mode}`, body:
         b.mode === 'Off' ? 'Recommend only; nothing will change on the pod.' :
         b.mode === 'InPlaceOrRecreate' ? 'The updater can now resize the running pod in place, or evict it if the kubelet can\'t.' :
-        `The updater may now act on pods (${b.mode}).`});
+        `The updater may now act on pods (${b.mode}).`,
+        why: b.mode === 'Off' ? 'Off is where every Java workload should start: read the recommendation against JVM metrics for a day before letting VPA touch anything.' :
+             'Whether a resize restarts the container is decided per resource by the pod\'s resizePolicy, not by the VPA. CPU can always change live; memory only helps a running JVM if the heap wasn\'t the problem.'});
     if (!a.recProvided && b.recProvided)
       story.push({t: b.t, head: 'First recommendation provided', body:
-        `Target ${fmtCpu(b.cpu.target)} CPU, ${fmtMem(b.mem.target)} memory. Early numbers lean on the Operator minimums; they settle as history accumulates.`});
+        `Target ${fmtCpu(b.cpu.target)} CPU, ${fmtMem(b.mem.target)} memory. Early numbers lean on the Operator minimums; they settle as history accumulates.`,
+        why: 'The recommender keeps a decaying histogram of usage per container. With minutes of data it recommends the floor (podMinMemoryMb, 250 Mi by default); with a day of representative traffic it recommends what the app actually uses, including any waste the JVM flags allow.'});
     // A memory change under RestartContainer, or any change while the JVM is
     // unreachable, is a restart in progress: let the next sample narrate it.
     const memChanged = a.mem.lim !== b.mem.lim;
@@ -354,7 +352,8 @@ function narrate(samples, events) {
         ? ` The JVM's max heap did <b>not</b> change (still ${fmtMem(heapB)}): it reads the limit once, at startup.` : '';
       const procNote = a.jvm && b.jvm && a.jvm.procs !== b.jvm.procs ? ` availableProcessors() went ${a.jvm.procs} → ${b.jvm.procs}.` : '';
       story.push({t: b.t, head: 'Pod resized in place', body:
-        `CPU limit ${fmtCpu(a.cpu.lim)} → ${fmtCpu(b.cpu.lim)}, memory limit ${fmtMem(a.mem.lim)} → ${fmtMem(b.mem.lim)}. Same pod, no restart.${procNote}${heapNote}`});
+        `CPU limit ${fmtCpu(a.cpu.lim)} → ${fmtCpu(b.cpu.lim)}, memory limit ${fmtMem(a.mem.lim)} → ${fmtMem(b.mem.lim)}; requests ${fmtCpu(a.cpu.req)} → ${fmtCpu(b.cpu.req)} CPU, ${fmtMem(a.mem.req)} → ${fmtMem(b.mem.req)} memory. Same pod, same IP, no restart.${procNote}${heapNote}`,
+        why: 'The kubelet rewrote the container\'s cgroup limits in place. The kernel honors the new memory ceiling immediately, so the extra room is real, but it is only usable by things that size themselves at runtime: metaspace, threads, direct buffers. The heap was sized once from MaxRAMPercentage at startup' + (heapA && heapB && heapA === heapB ? ` and is still ${fmtMem(heapB)}: the container got ${fmtMem(b.mem.lim - heapB)} of room the JVM cannot spend on heap.` : '.')});
     }
     if (restarted) {
       const oom = near(b.t, 'BackOff', 90, b.pod) || near(b.t, 'OOMKilling', 90, b.pod);
@@ -363,31 +362,40 @@ function narrate(samples, events) {
       const heap = heapA && heapB && heapA !== heapB ? ` Max heap ${fmtMem(heapA)} → ${fmtMem(heapB)}: the new JVM re-read the limit.` : '';
       if (policy && !oom)
         story.push({t: b.t, head: 'Container restarted by resize policy', body:
-          `Memory limit ${fmtMem((p0 && p0.pod === b.pod ? p0 : a).mem.lim)} → ${fmtMem(b.mem.lim)} with RestartContainer: a controlled restart, no crash.${heap}`});
+          `Memory limit ${fmtMem((p0 && p0.pod === b.pod ? p0 : a).mem.lim)} → ${fmtMem(b.mem.lim)} with RestartContainer: a controlled restart, no crash.${heap}`,
+          why: 'resizePolicy memory: RestartContainer tells the kubelet a memory change needs a restart. It stops the container, applies the limit, and starts it again in the same pod: same name, same IP, same node, restart count +1. The new JVM reads the new limit and sizes its heap from it. That is a few seconds of downtime per replica in exchange for a heap that is always right; a PodDisruptionBudget plus two replicas makes it invisible to callers.'});
       else
         story.push({t: b.t, warn: true, pod: b.pod, head: 'Container crashed and restarted', body:
           `Restart count ${a.restarts} → ${b.restarts}, same pod.${heap || ' Limits unchanged.'}` +
-          (b.mem.lim && heapA && b.mem.lim > heapA * 1.3 ? ' The container had room; the heap did not.' : '')});
+          (b.mem.lim && heapA && b.mem.lim > heapA * 1.3 ? ` The container had ${fmtMem(b.mem.lim)}; the heap had ${fmtMem(heapA)}.` : ''),
+          why: b.mem.lim && heapA && b.mem.lim > heapA * 1.3
+            ? 'This is the in-place trap. The container was resized up, so nothing in the kubelet or VPA sees a problem, but the running JVM kept its startup heap and threw OutOfMemoryError anyway. -XX:+ExitOnOutOfMemoryError turned that into an exit, the kubelet restarted the container, and only now does the heap match the limit. The resize "worked", one crash later. RestartContainer on memory is the fix.'
+            : 'The JVM ran out of heap and exited (-XX:+ExitOnOutOfMemoryError), or the kernel OOM-killed the container. Either way the kubelet restarted it in place; the new JVM re-read the limit at startup. Check jvm_memory_used_bytes non_heap vs heap to tell which one filled.'});
     }
     if (newPod) {
       const admitted = b.cpu.req != null && b.cpu.target != null && Math.abs(b.cpu.req - b.cpu.target) < 0.01;
       story.push({t: b.t, head: 'New pod', body:
-        `${a.pod} → ${b.pod}.${b.cpu.req != null ? ` Request ${fmtCpu(b.cpu.req)} CPU, ${fmtMem(b.mem.req)} memory` : ''}${admitted ? ' — the VPA admission controller sized it to the target.' : '.'}`});
+        `${a.pod} → ${b.pod}.${b.cpu.req != null ? ` Request ${fmtCpu(b.cpu.req)} CPU, ${fmtMem(b.mem.req)} memory; limits ${fmtCpu(b.cpu.lim)} CPU, ${fmtMem(b.mem.lim)} memory` : ''}${admitted ? ' — the VPA admission controller sized it to the target on the way in.' : '.'}`,
+        why: admitted
+          ? 'In any mode but Off, the VPA admission webhook rewrites a new pod\'s resources to the current recommendation before it is scheduled. Limits scale with the request to keep the Deployment\'s request:limit ratio, which is why a 5:1 CPU ratio can produce a limit well above maxAllowed; maxAllowed caps the request only.'
+          : 'A rollout replaced the pod. Any change to the pod template (an env var, a resizePolicy, an annotation) does this, and the new pod starts with the template\'s own requests unless the VPA admission controller is active.'});
     }
     const below = b.cpu.req != null && b.cpu.lower != null && (b.cpu.req < b.cpu.lower || b.mem.req < b.mem.lower);
     if (below && !crossed && b.mode && b.mode !== 'Off' && b.mode !== 'Initial') {
       crossed = true;
       story.push({t: b.t, head: 'Request is below the VPA lower bound', body:
         (b.cpu.req < b.cpu.lower ? `CPU request ${fmtCpu(b.cpu.req)} < lower bound ${fmtCpu(b.cpu.lower)}` : `Memory request ${fmtMem(b.mem.req)} < lower bound ${fmtMem(b.mem.lower)}`) +
-        '. The updater acts on out-of-bounds pods on its next pass, about a minute.'});
+        '. The updater acts on out-of-bounds pods on its next pass, about a minute.',
+        why: 'The updater only moves quickly for pods whose request is outside the recommendation\'s lower–upper band. A pod inside the band is left alone until it is 12 hours old (--in-recommendation-bounds-eviction-lifetime-threshold). That is the right default in production and the reason a freshly admitted pod will not be touched during a demo.'});
     }
     if (!below) crossed = false;
     const capped = s => s.policy && s.policy.maxCpu && s.cpu.target != null && Math.abs(s.cpu.target - s.policy.maxCpu) < 1e-6;
     if (capped(b) && !capped(a))
       story.push({t: b.t, head: 'CPU recommendation hit maxAllowed', body:
-        `Target is capped at ${fmtCpu(b.policy.maxCpu)}${b.cpu.uncapped && b.cpu.uncapped > b.policy.maxCpu ? `; the uncapped target is ${fmtCpu(b.cpu.uncapped)}` : ''}. maxAllowed caps the request, not the limit.`});
+        `Target is capped at ${fmtCpu(b.policy.maxCpu)}${b.cpu.uncapped && b.cpu.uncapped > b.policy.maxCpu ? `; the uncapped target is ${fmtCpu(b.cpu.uncapped)}` : ''}. maxAllowed caps the request, not the limit.`,
+        why: 'The app wants more CPU than the VPA is allowed to give it. On a JVM that shows up as GC and JIT threads starved by the CFS quota: longer pauses and slower warm-up, which look like a memory problem on a dashboard. Compare uncappedTarget with the limit before raising maxAllowed.'});
   }
-  for (const e of events) if (e.kind === 'Note') story.push({t: e.t, note: true, head: e.message, body: 'Instructor note'});
+  for (const e of events) if (e.kind === 'Note') story.push({t: e.t, note: true, head: e.message, body: 'Instructor note, from an annotation on the VPA.'});
   story.sort((x, y) => x.t - y.t);
   return story;
 }
@@ -416,10 +424,11 @@ function renderStory(story) {
   }
   const last = story[story.length - 1];
   nowEl.className = 'now ' + (last.warn ? 'warn' : last.note ? 'note' : '');
-  nowEl.innerHTML = `<div class="when">${fmtT(last.t)} · ${fmtAge(Date.now() / 1000 - last.t)} ago</div><div class="head">${last.head}</div><div class="body">${last.body}</div>`;
-  const prev = story.slice(0, -1).reverse().slice(0, KIOSK ? 6 : 12);
+  nowEl.innerHTML = `<div class="when">${fmtT(last.t)} · ${fmtAge(Date.now() / 1000 - last.t)} ago</div><div class="head">${last.head}</div><div class="body">${last.body}</div>` +
+    (last.why ? `<div class="why">${last.why}</div>` : '');
+  const prev = story.slice(0, -1).reverse().slice(0, KIOSK ? 5 : 12);
   $('#sofar').style.display = prev.length ? '' : 'none';
-  $('#sofarlist').innerHTML = prev.map(x => `<li class="${x.warn ? 'warn' : ''}"><b>${fmtT(x.t)}</b> — ${x.head}</li>`).join('');
+  $('#sofarlist').innerHTML = prev.map(x => `<li class="${x.warn ? 'warn' : ''}"><b>${fmtT(x.t)}</b> — <span class="head">${x.head}</span><div class="body">${x.body}</div>${x.why ? `<div class="why">${x.why}</div>` : ''}</li>`).join('');
 }
 
 async function tick() {
@@ -440,7 +449,6 @@ async function tick() {
     $('#err').textContent = st.error ? 'poll error (showing last good data): ' + st.error : '';
     tiles(st);
     draw('mem', 'mem', st.samples, st.events, fmtMem);
-    draw('cpu', 'cpu', st.samples, st.events, fmtCpu);
     eventsTable(st.events);
   } catch (e) { $('#err').textContent = 'cannot reach /api/state: ' + e; }
 }

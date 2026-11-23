@@ -371,7 +371,7 @@ space as in Module 1, with no `OutOfMemoryError` on the way there.
 On VPA Watch the headline reads *Container restarted by resize policy*,
 and the *container limit* and *JVM max heap* lines step up together this
 time, at a gray flag tagged *policy restart* rather than a red one.
-Compare that to the previous step's shape: same outcome, no crash.
+Compare that to the previous step: same outcome, no crash.
 On the dashboard, *JVM max heap* steps up here, and *Container restarts*
 ticks up with it; compare with Exercise 3, where the restart came from an
 OOM instead of a policy.

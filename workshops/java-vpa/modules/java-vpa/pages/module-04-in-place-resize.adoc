@@ -2,8 +2,7 @@
 
 This module switches the VPA to `InPlaceOrRecreate`, watches a CPU resize
 land on a running pod without a restart, then shows why a memory resize
-doesn't do what people expect for a heap-bound JVM, and how to configure the
-honest version.
+doesn't do what people expect for a heap-bound JVM, and how to reconfigure the VPA `restartPolicy`.
 
 .Exercises on this page
 * <<exercise-1>>
@@ -300,7 +299,7 @@ That crash is what `RestartContainer` on memory turns into a controlled
 restart.
 
 [#exercise-4]
-== Exercise 4: The honest configuration
+== Exercise 4: Reconfiguring the VPAs `restartPolicy`
 
 . Change the memory policy to `RestartContainer`:
 +
